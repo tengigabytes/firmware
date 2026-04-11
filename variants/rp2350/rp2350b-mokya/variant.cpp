@@ -15,6 +15,8 @@
 #include <Arduino.h>
 #include <stdint.h>
 #include "pico/multicore.h"
+#include "ipc_ringbuf.h"
+#include "ipc_shared_layout.h"
 
 #define MOKYA_CORE1_VECTOR_TABLE   0x10200000u
 #define MOKYA_CORE1_SENTINEL_ADDR  0x20078000u
@@ -40,6 +42,14 @@ extern "C" void initVariant()
     dbg[3] = 0;
     *sentinel = 0u;
     __asm volatile("dmb 0xF" ::: "memory");
+
+    // Phase 2 M1.1: zero the shared-SRAM IPC region and publish IPC_BOOT_MAGIC
+    // BEFORE launching Core 1. The bridge image spins on boot_magic until it
+    // sees IPC_BOOT_MAGIC before touching any ring, so this ordering is the
+    // handshake: if Core 1 ever sees bogus head/tail values it is this call
+    // that failed to run.
+    ipc_shared_init();
+    dbg[0] = 0x11au;  // phase 1a: shared IPC zeroed + magic published
 
     // Core 1 image begins with a Cortex-M vector table at 0x10200000:
     //   word[0] = initial MSP

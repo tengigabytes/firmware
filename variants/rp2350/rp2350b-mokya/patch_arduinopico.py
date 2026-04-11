@@ -293,6 +293,72 @@ def _patch_freertos_lwip(fw_dir):
           % len(FREERTOS_LWIP_PATCHES))
 
 
+# --------------------------------------------------------------------- (c)
+# Phase 2 M1.1 — reserve a fixed 24 KB SHARED_IPC region at the top of main
+# SRAM so both cores can agree on the address of g_ipc_shared without any
+# linker symbol exchange. The Arduino-Pico default ld gives Core 0 a .heap
+# section that grows to ORIGIN(RAM)+LENGTH(RAM) = 0x20080000, so we have to
+# shrink the RAM region AND add a matching NOLOAD section that lives in a
+# separate MEMORY region. The section is populated by ipc_ringbuf.c's
+# `__attribute__((section(".shared_ipc"))) g_ipc_shared` definition.
+LD_MARKER = "/* MOKYA_SHARED_IPC_PATCH */"
+
+LD_MEMORY_TARGET = (
+    "    RAM(rwx) : ORIGIN =  0x20000000, LENGTH = __RAM_LENGTH__\n"
+    "    SCRATCH_X(rwx) : ORIGIN = 0x20080000, LENGTH = 4k"
+)
+LD_MEMORY_REPLACEMENT = (
+    "    RAM(rwx) : ORIGIN =  0x20000000, LENGTH = __RAM_LENGTH__ - 0x6000  "
+    + LD_MARKER
+    + "\n"
+    "    SHARED_IPC(rw) : ORIGIN = 0x2007A000, LENGTH = 0x6000  "
+    + LD_MARKER
+    + "\n"
+    "    SCRATCH_X(rwx) : ORIGIN = 0x20080000, LENGTH = 4k"
+)
+
+# Place the .shared_ipc NOLOAD section just before .scratch_x so it is
+# guaranteed to be after .bss / .heap in the link order. Both symbols are
+# resolved at absolute addresses via MEMORY > SHARED_IPC, so the textual
+# position only affects diagnostics, not layout.
+LD_SECTION_TARGET = (
+    "    /* Start and end symbols must be word-aligned */\n"
+    "    .scratch_x : {"
+)
+LD_SECTION_REPLACEMENT = (
+    "    .shared_ipc (NOLOAD) : {  " + LD_MARKER + "\n"
+    "        __shared_ipc_start = .;\n"
+    "        KEEP(*(.shared_ipc))\n"
+    "        __shared_ipc_end = .;\n"
+    "    } > SHARED_IPC\n"
+    "\n"
+    "    /* Start and end symbols must be word-aligned */\n"
+    "    .scratch_x : {"
+)
+
+
+def _patch_memmap_ld(fw_dir):
+    src = os.path.join(fw_dir, "lib", "rp2350", "memmap_default.ld")
+    if not os.path.isfile(src):
+        print("[mokya-patch] %s not found; skipping" % src)
+        return
+    with open(src, "r", encoding="utf-8") as f:
+        content = f.read()
+    if LD_MARKER in content:
+        print("[mokya-patch] memmap_default.ld already patched")
+        return
+    if LD_MEMORY_TARGET not in content or LD_SECTION_TARGET not in content:
+        print("[mokya-patch] WARNING: memmap_default.ld patch targets not "
+              "found; framework version may have drifted. Patch NOT applied.")
+        return
+    content = content.replace(LD_MEMORY_TARGET, LD_MEMORY_REPLACEMENT, 1)
+    content = content.replace(LD_SECTION_TARGET, LD_SECTION_REPLACEMENT, 1)
+    with open(src, "w", encoding="utf-8") as f:
+        f.write(content)
+    print("[mokya-patch] memmap_default.ld patched: SHARED_IPC region "
+          "+ .shared_ipc NOLOAD section at 0x2007A000 (24 KB)")
+
+
 # --------------------------------------------------------------------- run
 fw_dir = env.PioPlatform().get_package_dir("framework-arduinopico")  # noqa: F821
 if not fw_dir:
@@ -303,3 +369,4 @@ else:
     _patch_freertos_lwip(fw_dir)
     _patch_portmacro(fw_dir)
     _patch_portc(fw_dir)
+    _patch_memmap_ld(fw_dir)
