@@ -26,7 +26,7 @@ class IpcSerialStream : public Stream {
     int available() override;
     int read() override;
     int peek() override;
-    void flush() override {}
+    void flush() override;
     size_t write(uint8_t b) override;
     size_t write(const uint8_t *buf, size_t len) override;
     using Print::write;
@@ -49,6 +49,16 @@ class IpcSerialStream : public Stream {
     uint16_t rx_len_  = 0;   // valid bytes in rx_buf_
     uint16_t rx_pos_  = 0;   // next byte to serve
     uint8_t  tx_seq_  = 0;   // rolling sequence number for push()
+
+    // TX accumulation buffer.  Meshtastic's RedirectablePrint dispatches
+    // log output one byte at a time via write(uint8_t).  Without batching,
+    // every single byte occupies a full 264-byte ring slot, flooding the
+    // SPSC ring and starving protobuf data.  We accumulate here and flush
+    // as one ring push when the buffer is full or flush() is called.
+    uint8_t  tx_acc_[256];
+    uint16_t tx_acc_len_ = 0;
+
+    void flush_tx_acc_();
 
     // Pull the next message off c1_to_c0 into rx_buf_ (if any). Returns
     // true if rx_buf_ gained bytes.

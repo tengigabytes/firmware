@@ -57,16 +57,26 @@ int IpcSerialStream::peek()
 
 size_t IpcSerialStream::write(uint8_t b)
 {
-    return write(&b, 1);
+    // Accumulate single-byte writes (mainly from RedirectablePrint log
+    // output) and flush as one ring push when the buffer is full OR on
+    // newline.  Log lines from RedirectablePrint end with '\n'; flushing
+    // on that boundary keeps batching efficient while preventing stalls
+    // when accumulated bytes never reach the 256-byte buffer cap between
+    // protobuf frame writes.
+    tx_acc_[tx_acc_len_++] = b;
+    if (tx_acc_len_ >= sizeof(tx_acc_) || b == '\n') {
+        flush_tx_acc_();
+    }
+    return 1;
 }
 
 size_t IpcSerialStream::write(const uint8_t *buf, size_t len)
 {
-    // Meshtastic's Serial framing assumes writes don't silently drop bytes.
-    // We chunk into IPC_MSG_PAYLOAD_MAX-byte messages and busy-wait up to
-    // kWriteBusyWaitMs per chunk when the ring is full; beyond that, we
-    // drop the remainder and rely on the overflow counter + upper-layer
-    // retry.
+    // Multi-byte write (protobuf frames from emitTxBuffer).  Flush any
+    // accumulated single-byte data first so ordering is preserved, then
+    // push the caller's buffer directly — no extra copy.
+    flush_tx_acc_();
+
     size_t written = 0;
     while (written < len) {
         const size_t remaining = len - written;
@@ -85,20 +95,44 @@ size_t IpcSerialStream::write(const uint8_t *buf, size_t len)
                                    chunk);
             if (pushed) break;
             if ((int32_t)(millis() - deadline) >= 0) break;
-            // Yield briefly. No FreeRTOS delay here — this runs in the
-            // __core0 Meshtastic task and the Arduino-Pico FreeRTOS port
-            // remaps delay() onto vTaskDelay when available.
             yield();
         }
         if (!pushed) {
-            // Dropped chunk. overflow counter already incremented inside
-            // ipc_ring_push; return short write so the caller can decide.
             break;
         }
         tx_seq_++;
         written += chunk;
     }
     return written;
+}
+
+void IpcSerialStream::flush()
+{
+    flush_tx_acc_();
+}
+
+void IpcSerialStream::flush_tx_acc_()
+{
+    if (tx_acc_len_ == 0u) return;
+
+    const uint32_t deadline = millis() + kWriteBusyWaitMs;
+    bool pushed = false;
+    for (;;) {
+        pushed = ipc_ring_push(&g_ipc_shared.c0_to_c1_ctrl,
+                                g_ipc_shared.c0_to_c1_slots,
+                                IPC_MSG_SERIAL_BYTES,
+                                tx_seq_,
+                                tx_acc_,
+                                tx_acc_len_);
+        if (pushed) break;
+        if ((int32_t)(millis() - deadline) >= 0) break;
+        yield();
+    }
+    if (pushed) {
+        tx_seq_++;
+    }
+    // Clear even on failure — stale log bytes are not worth blocking for.
+    tx_acc_len_ = 0u;
 }
 
 /* ── RX staging ────────────────────────────────────────────────────────── */
