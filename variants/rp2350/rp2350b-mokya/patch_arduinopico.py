@@ -25,6 +25,11 @@
 #   `platform_packages` pin in platformio.ini locks the framework version, so
 #   the target lines are stable for this build.
 #
+# NOTE: flash.c (P2-11 fix) is NOT patched here — Pico SDK ships flash.c as
+# precompiled libpico.a, so source patches have no effect. Instead we use
+# -Wl,--wrap=flash_range_erase/program at link time. See flash_safety_wrap.c
+# and the -Wl,--wrap flags in platformio.ini.
+#
 # License: MIT.
 
 import os
@@ -223,7 +228,7 @@ def _patch_portc(fw_dir):
 #
 # Problem: with `configSUPPORT_PICO_SYNC_INTEROP == 1` the RP2350_ARM_NTZ port
 # claims a doorbell and registers `prvDoorbellInterruptHandler` on SIO_IRQ_BELL.
-# Core 1 (our bridge) fires doorbell 0 to signal new c1→c0 data. Because
+# Core 1 (our bridge) fires doorbell 0 to signal new c1->c0 data. Because
 # SIO_IRQ_BELL fires for *any* doorbell, the FreeRTOS ISR re-enters endlessly
 # (if the claimed doorbell differs from 0) or deadlocks on
 # `spin_lock_blocking(pxCrossCoreSpinLock)` (if it matches). Either way Core 0
