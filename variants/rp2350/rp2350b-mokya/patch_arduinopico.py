@@ -217,6 +217,79 @@ def _patch_portc(fw_dir):
     print("[mokya-patch] port.c patched: ulCriticalNesting promoted to extern")
 
 
+# --------------------------------------------------------------------- (d2)
+# Phase 2 M2.0 — disable FreeRTOS's pico_sync_interop doorbell ISR registration
+# in the single-core `xPortStartScheduler` path.
+#
+# Problem: with `configSUPPORT_PICO_SYNC_INTEROP == 1` the RP2350_ARM_NTZ port
+# claims a doorbell and registers `prvDoorbellInterruptHandler` on SIO_IRQ_BELL.
+# Core 1 (our bridge) fires doorbell 0 to signal new c1→c0 data. Because
+# SIO_IRQ_BELL fires for *any* doorbell, the FreeRTOS ISR re-enters endlessly
+# (if the claimed doorbell differs from 0) or deadlocks on
+# `spin_lock_blocking(pxCrossCoreSpinLock)` (if it matches). Either way Core 0
+# is stuck and setup() never reaches consoleInit().
+#
+# MokyaLora does not use pico-sdk cross-core sync primitives (our IPC is via the
+# SPSC ring), so disabling the registration is safe. For M2 we will install our
+# own doorbell handler on IPC_DOORBELL_NUM.
+DOORBELL_MARKER = "// MOKYA_DOORBELL_PATCH"
+
+PORTC_DOORBELL_PATCHES = [
+    (
+        "        #if ( LIB_PICO_MULTICORE == 1 )\n"
+        "            #if ( configSUPPORT_PICO_SYNC_INTEROP == 1 )\n"
+        "                // claim same number of both cores for simplicity\n"
+        "                cDoorbellNum = (int8_t) multicore_doorbell_claim_unused(0b11, true);\n"
+        "                multicore_doorbell_clear_current_core(cDoorbellNum);\n"
+        "                multicore_doorbell_clear_other_core(cDoorbellNum);\n"
+        "                uint32_t irq_num = multicore_doorbell_irq_num(cDoorbellNum);\n"
+        "                irq_set_priority( irq_num, portMIN_INTERRUPT_PRIORITY );\n"
+        "                irq_set_exclusive_handler( irq_num, prvDoorbellInterruptHandler );\n"
+        "                irq_set_enabled( irq_num, 1 );\n"
+        "            #endif\n"
+        "        #endif",
+        "#if 0  " + DOORBELL_MARKER + "\n"
+        "        #if ( LIB_PICO_MULTICORE == 1 )\n"
+        "            #if ( configSUPPORT_PICO_SYNC_INTEROP == 1 )\n"
+        "                // claim same number of both cores for simplicity\n"
+        "                cDoorbellNum = (int8_t) multicore_doorbell_claim_unused(0b11, true);\n"
+        "                multicore_doorbell_clear_current_core(cDoorbellNum);\n"
+        "                multicore_doorbell_clear_other_core(cDoorbellNum);\n"
+        "                uint32_t irq_num = multicore_doorbell_irq_num(cDoorbellNum);\n"
+        "                irq_set_priority( irq_num, portMIN_INTERRUPT_PRIORITY );\n"
+        "                irq_set_exclusive_handler( irq_num, prvDoorbellInterruptHandler );\n"
+        "                irq_set_enabled( irq_num, 1 );\n"
+        "            #endif\n"
+        "        #endif\n"
+        "#endif  " + DOORBELL_MARKER,
+    ),
+]
+
+
+def _patch_portc_doorbell(fw_dir):
+    src = os.path.join(fw_dir, "FreeRTOS-Kernel", "portable", "ThirdParty",
+                       "GCC", "RP2350_ARM_NTZ", "non_secure", "port.c")
+    if not os.path.isfile(src):
+        print("[mokya-patch] %s not found; skipping" % src)
+        return
+    with open(src, "r", encoding="utf-8") as f:
+        content = f.read()
+    if DOORBELL_MARKER in content:
+        print("[mokya-patch] port.c doorbell already patched")
+        return
+    missing = [i for i, (tgt, _) in enumerate(PORTC_DOORBELL_PATCHES) if tgt not in content]
+    if missing:
+        print("[mokya-patch] WARNING: port.c doorbell patch targets %s not "
+              "found; framework version may have drifted. Patch NOT applied."
+              % missing)
+        return
+    for tgt, repl in PORTC_DOORBELL_PATCHES:
+        content = content.replace(tgt, repl, 1)
+    with open(src, "w", encoding="utf-8") as f:
+        f.write(content)
+    print("[mokya-patch] port.c patched: pico_sync_interop doorbell ISR disabled")
+
+
 PORTMACRO_PATCHES = [
     # In single-core mode the RP2350 port.c defines `volatile uint32_t
     # ulCriticalNesting = 0;` but portmacro.h only declares the SMP-array
@@ -308,7 +381,7 @@ LD_MEMORY_TARGET = (
     "    SCRATCH_X(rwx) : ORIGIN = 0x20080000, LENGTH = 4k"
 )
 LD_MEMORY_REPLACEMENT = (
-    "    RAM(rwx) : ORIGIN =  0x20000000, LENGTH = __RAM_LENGTH__ - 0x6000  "
+    "    RAM(rwx) : ORIGIN =  0x20000000, LENGTH = __RAM_LENGTH__ - 0x14000  "
     + LD_MARKER
     + "\n"
     "    SHARED_IPC(rw) : ORIGIN = 0x2007A000, LENGTH = 0x6000  "
@@ -369,4 +442,5 @@ else:
     _patch_freertos_lwip(fw_dir)
     _patch_portmacro(fw_dir)
     _patch_portc(fw_dir)
+    _patch_portc_doorbell(fw_dir)
     _patch_memmap_ld(fw_dir)

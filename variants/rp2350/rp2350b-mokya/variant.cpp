@@ -17,6 +17,9 @@
 #include "pico/multicore.h"
 #include "ipc_ringbuf.h"
 #include "ipc_shared_layout.h"
+#include "ipc_protocol.h"
+#include "Observer.h"
+#include "sleep.h"
 
 #define MOKYA_CORE1_VECTOR_TABLE   0x10200000u
 #define MOKYA_CORE1_SENTINEL_ADDR  0x20078000u
@@ -28,6 +31,36 @@
 // +0x04 vector_table word[0] read back (initial SP)
 // +0x08 vector_table word[1] read back (reset handler)
 // +0x0C post-launch sentinel snapshot sampled by Core 0 after ~1 ms spin
+
+/* ── Graceful reboot notification (M2 Part B) ───────────────────────────── */
+/* When Meshtastic calls Power::reboot(), the notifyReboot observable fires
+ * before watchdog_reboot(). We push IPC_MSG_REBOOT_NOTIFY so Core 1 can
+ * tud_disconnect() before the chip-wide reset yanks the USB controller. */
+
+struct RebootNotifier {
+    int onReboot(void * /*arg*/)
+    {
+        /* Push zero-payload reboot notification to the c0→c1 ring. */
+        (void)ipc_ring_push(&g_ipc_shared.c0_to_c1_ctrl,
+                            g_ipc_shared.c0_to_c1_slots,
+                            IPC_MSG_REBOOT_NOTIFY,
+                            0u,      /* seq */
+                            nullptr, /* payload */
+                            0u);     /* payload_len */
+        /* Wake Core 1 immediately so it processes the notification. */
+#if 0 /* M2 doorbell — disabled until Core 1 ISR is enabled */
+        multicore_doorbell_set_other_core(IPC_DOORBELL_NUM);
+#endif
+        /* Give Core 1 time to call tud_disconnect() and let the host
+         * process the USB disconnect event before the watchdog fires. */
+        delay(500);
+        return 0;  /* continue — let Power::reboot() proceed */
+    }
+
+    CallbackObserver<RebootNotifier, void *> observer{this, &RebootNotifier::onReboot};
+};
+
+static RebootNotifier s_reboot_notifier;
 
 extern "C" void initVariant()
 {
@@ -81,4 +114,9 @@ extern "C" void initVariant()
     for (volatile int i = 0; i < 100000; ++i) { __asm volatile("nop"); }
     dbg[3] = *sentinel;
     dbg[0] = 0x14u;  // phase 4: sentinel snapshot captured
+
+    // Register reboot observer — when Meshtastic calls Power::reboot(),
+    // we notify Core 1 to disconnect USB before the watchdog fires.
+    s_reboot_notifier.observer.observe(&notifyReboot);
+    dbg[0] = 0x15u;  // phase 5: reboot observer registered
 }

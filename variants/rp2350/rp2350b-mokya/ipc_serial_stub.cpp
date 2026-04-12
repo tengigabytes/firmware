@@ -13,6 +13,7 @@
 #include "ipc_shared_layout.h"
 #include "ipc_ringbuf.h"
 
+#include <pico/multicore.h>
 #include <Arduino.h>
 
 IpcSerialStream Serial;
@@ -22,10 +23,22 @@ IpcSerialStream Serial;
 // matches the ADR-4 target.
 static constexpr uint32_t kWriteBusyWaitMs = 50;
 
+/* ── Debug breadcrumbs (SWD-readable) ──────────────────────────────────── */
+/* Debug breadcrumbs in shared IPC tail pad (outside both cores' heap).
+ * 0x2007FFE0: available() call count
+ * 0x2007FFE4: refill_rx_() call count
+ * 0x2007FFE8: refill_rx_() pop success count
+ * 0x2007FFEC: refill_rx_() SERIAL_BYTES hit count */
+static volatile uint32_t &dbg_avail_count  = *reinterpret_cast<volatile uint32_t*>(0x2007FFE0u);
+static volatile uint32_t &dbg_refill_count = *reinterpret_cast<volatile uint32_t*>(0x2007FFE4u);
+static volatile uint32_t &dbg_pop_ok_count = *reinterpret_cast<volatile uint32_t*>(0x2007FFE8u);
+static volatile uint32_t &dbg_serial_count = *reinterpret_cast<volatile uint32_t*>(0x2007FFECu);
+
 /* ── Public Stream API ─────────────────────────────────────────────────── */
 
 int IpcSerialStream::available()
 {
+    dbg_avail_count++;
     if (rx_pos_ < rx_len_) {
         return rx_len_ - rx_pos_;
     }
@@ -93,7 +106,12 @@ size_t IpcSerialStream::write(const uint8_t *buf, size_t len)
                                    tx_seq_,
                                    buf + written,
                                    chunk);
-            if (pushed) break;
+            if (pushed) {
+#if 0 /* M2 doorbell — disabled until Core 1 ISR is enabled */
+                multicore_doorbell_set_other_core(IPC_DOORBELL_NUM);
+#endif
+                break;
+            }
             if ((int32_t)(millis() - deadline) >= 0) break;
             yield();
         }
@@ -130,6 +148,9 @@ void IpcSerialStream::flush_tx_acc_()
     }
     if (pushed) {
         tx_seq_++;
+#if 0 /* M2 doorbell — disabled until Core 1 ISR is enabled */
+        multicore_doorbell_set_other_core(IPC_DOORBELL_NUM);
+#endif
     }
     // Clear even on failure — stale log bytes are not worth blocking for.
     tx_acc_len_ = 0u;
@@ -139,6 +160,7 @@ void IpcSerialStream::flush_tx_acc_()
 
 bool IpcSerialStream::refill_rx_()
 {
+    dbg_refill_count++;
     IpcMsgHeader hdr;
     if (!ipc_ring_pop(&g_ipc_shared.c1_to_c0_ctrl,
                       g_ipc_shared.c1_to_c0_slots,
@@ -147,6 +169,7 @@ bool IpcSerialStream::refill_rx_()
                       sizeof(rx_buf_))) {
         return false;
     }
+    dbg_pop_ok_count++;
 
     if (hdr.msg_id != IPC_MSG_SERIAL_BYTES) {
         // Non-bytes messages (e.g. IPC_MSG_LOG_LINE) are not consumed by
@@ -157,6 +180,7 @@ bool IpcSerialStream::refill_rx_()
         return false;
     }
 
+    dbg_serial_count++;
     rx_len_ = hdr.payload_len;
     rx_pos_ = 0;
     return rx_len_ > 0;
