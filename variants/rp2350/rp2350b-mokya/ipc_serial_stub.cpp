@@ -107,9 +107,7 @@ size_t IpcSerialStream::write(const uint8_t *buf, size_t len)
                                    buf + written,
                                    chunk);
             if (pushed) {
-#if 0 /* M2 doorbell — disabled until Core 1 ISR is enabled */
                 multicore_doorbell_set_other_core(IPC_DOORBELL_NUM);
-#endif
                 break;
             }
             if ((int32_t)(millis() - deadline) >= 0) break;
@@ -148,9 +146,7 @@ void IpcSerialStream::flush_tx_acc_()
     }
     if (pushed) {
         tx_seq_++;
-#if 0 /* M2 doorbell — disabled until Core 1 ISR is enabled */
         multicore_doorbell_set_other_core(IPC_DOORBELL_NUM);
-#endif
     }
     // Clear even on failure — stale log bytes are not worth blocking for.
     tx_acc_len_ = 0u;

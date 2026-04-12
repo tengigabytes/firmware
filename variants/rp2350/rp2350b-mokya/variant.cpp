@@ -48,9 +48,7 @@ struct RebootNotifier {
                             nullptr, /* payload */
                             0u);     /* payload_len */
         /* Wake Core 1 immediately so it processes the notification. */
-#if 0 /* M2 doorbell — disabled until Core 1 ISR is enabled */
         multicore_doorbell_set_other_core(IPC_DOORBELL_NUM);
-#endif
         /* Give Core 1 time to call tud_disconnect() and let the host
          * process the USB disconnect event before the watchdog fires. */
         delay(500);
