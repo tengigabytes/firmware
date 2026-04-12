@@ -437,6 +437,77 @@ def _patch_memmap_ld(fw_dir):
           "+ .shared_ipc NOLOAD section at 0x2007A000 (24 KB)")
 
 
+# --------------------------------------------------------------------- (e)
+# Phase 2 M2 — make detachInterrupt() ISR-safe under FreeRTOS
+#
+# Problem: Meshtastic's RadioLib ISR calls SX126x::clearDio1Action() which
+# calls detachInterrupt(). Arduino-Pico's detachInterrupt() acquires a
+# CoreMutex, which calls __get_freertos_mutex_for_ptr(). If the FreeRTOS
+# semaphore wrapper for _irqMutex hasn't been lazily created yet, it tries
+# pvPortMalloc from ISR context → vPortExitCritical detects ISR → rtosFatalError
+# → panic → puts → recursive malloc → stack overflow → HardFault.
+#
+# Fix: When in ISR context (portCHECK_IF_IN_ISR), skip the CoreMutex and
+# call _detachInterruptInternal() directly. This is safe because:
+# (a) we're at interrupt priority — no lower-priority interrupt can preempt us
+# (b) _detachInterruptInternal only does gpio_set_irq_enabled + bitmask clear
+ISR_DETACH_MARKER = "// MOKYA_ISR_DETACH_PATCH"
+
+ISR_DETACH_PATCHES = [
+    (
+        "extern \"C\" void detachInterrupt(pin_size_t pin) {\n"
+        "    CoreMutex m(&_irqMutex);\n"
+        "    if (!m) {\n"
+        "        return;\n"
+        "    }\n"
+        "\n"
+        "    noInterrupts();\n"
+        "    _detachInterruptInternal(pin);\n"
+        "    interrupts();\n"
+        "}",
+        "extern \"C\" void detachInterrupt(pin_size_t pin) {\n"
+        "#if defined(__FREERTOS)  " + ISR_DETACH_MARKER + "\n"
+        "    if (portCHECK_IF_IN_ISR()) {\n"
+        "        _detachInterruptInternal(pin);\n"
+        "        return;\n"
+        "    }\n"
+        "#endif  " + ISR_DETACH_MARKER + "\n"
+        "    CoreMutex m(&_irqMutex);\n"
+        "    if (!m) {\n"
+        "        return;\n"
+        "    }\n"
+        "\n"
+        "    noInterrupts();\n"
+        "    _detachInterruptInternal(pin);\n"
+        "    interrupts();\n"
+        "}",
+    ),
+]
+
+
+def _patch_wiring_detach_interrupt(fw_dir):
+    src = os.path.join(fw_dir, "cores", "rp2040", "wiring_private.cpp")
+    if not os.path.isfile(src):
+        print("[mokya-patch] %s not found; skipping" % src)
+        return
+    with open(src, "r", encoding="utf-8") as f:
+        content = f.read()
+    if ISR_DETACH_MARKER in content:
+        print("[mokya-patch] wiring_private.cpp detachInterrupt already patched")
+        return
+    missing = [i for i, (tgt, _) in enumerate(ISR_DETACH_PATCHES) if tgt not in content]
+    if missing:
+        print("[mokya-patch] WARNING: wiring_private.cpp detachInterrupt patch "
+              "targets %s not found; framework version may have drifted. "
+              "Patch NOT applied." % missing)
+        return
+    for tgt, repl in ISR_DETACH_PATCHES:
+        content = content.replace(tgt, repl, 1)
+    with open(src, "w", encoding="utf-8") as f:
+        f.write(content)
+    print("[mokya-patch] wiring_private.cpp patched: detachInterrupt ISR-safe")
+
+
 # --------------------------------------------------------------------- run
 fw_dir = env.PioPlatform().get_package_dir("framework-arduinopico")  # noqa: F821
 if not fw_dir:
@@ -449,3 +520,4 @@ else:
     _patch_portc(fw_dir)
     _patch_portc_doorbell(fw_dir)
     _patch_memmap_ld(fw_dir)
+    _patch_wiring_detach_interrupt(fw_dir)
