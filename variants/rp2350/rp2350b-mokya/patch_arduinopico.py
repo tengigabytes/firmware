@@ -372,10 +372,12 @@ def _patch_freertos_lwip(fw_dir):
 
 
 # --------------------------------------------------------------------- (c)
-# Phase 2 M1.1 — reserve a fixed 24 KB SHARED_IPC region at the top of main
+# Phase 2 M1.1 / M2 RAM replan — shrink Core 0 RAM to 176 KB (0x20000000–
+# 0x2BFFF) and reserve a fixed 24 KB SHARED_IPC region at the top of main
 # SRAM so both cores can agree on the address of g_ipc_shared without any
-# linker symbol exchange. The Arduino-Pico default ld gives Core 0 a .heap
-# section that grows to ORIGIN(RAM)+LENGTH(RAM) = 0x20080000, so we have to
+# linker symbol exchange. Core 1 gets 312 KB (0x2002C000–0x20079FFF) via its
+# own linker script (memmap_core1_bridge.ld). The Arduino-Pico default ld
+# gives Core 0 a .heap section that grows to ORIGIN(RAM)+LENGTH(RAM), so we
 # shrink the RAM region AND add a matching NOLOAD section that lives in a
 # separate MEMORY region. The section is populated by ipc_ringbuf.c's
 # `__attribute__((section(".shared_ipc"))) g_ipc_shared` definition.
@@ -386,7 +388,7 @@ LD_MEMORY_TARGET = (
     "    SCRATCH_X(rwx) : ORIGIN = 0x20080000, LENGTH = 4k"
 )
 LD_MEMORY_REPLACEMENT = (
-    "    RAM(rwx) : ORIGIN =  0x20000000, LENGTH = __RAM_LENGTH__ - 0x14000  "
+    "    RAM(rwx) : ORIGIN =  0x20000000, LENGTH = __RAM_LENGTH__ - 0x54000  "
     + LD_MARKER
     + "\n"
     "    SHARED_IPC(rw) : ORIGIN = 0x2007A000, LENGTH = 0x6000  "
