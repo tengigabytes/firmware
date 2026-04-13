@@ -66,6 +66,15 @@ static RebootNotifier s_reboot_notifier;
 
 extern "C" void initVariant()
 {
+    /* ── P2-13 fix: re-enable XIP cache ────────────────────────────────────
+     * The RP2350 ROM and/or PSRAM init clear the XIP_CTRL EN_SECURE /
+     * EN_NONSECURE bits, disabling the 4 KB XIP cache.  Without cache,
+     * every instruction fetch goes to QSPI flash at 37.5 MHz, making
+     * getFromRadio() ~100× slower than expected.  Re-enable both bits
+     * via the atomic SET alias so we don't disturb other XIP_CTRL fields
+     * (e.g. WRITABLE_M1 set by psram_init). */
+    *reinterpret_cast<volatile uint32_t *>(0x400CA000u) = 0x00000003u;
+
     /* ── P2-7 fix: MSP stack overflow guard ────────────────────────────────
      * Core 0 MSP starts at 0x20082000 (top of SCRATCH_Y) and grows down
      * through SCRATCH_Y + SCRATCH_X (8 KB total, ending at 0x20080000).

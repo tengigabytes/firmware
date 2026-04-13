@@ -41,6 +41,14 @@
 #define MOKYA_FLASH_LOCK_PARKED  2u
 #define MOKYA_FLASH_DOORBELL     1u   /* must match IPC_FLASH_DOORBELL */
 
+/* XIP_CTRL register — hardcoded to avoid header dependency.
+ * Bits 0-1 (EN_SECURE, EN_NONSECURE) enable the XIP cache.  ROM
+ * flash_exit_xip() clears the register and boot2 only restores QMI —
+ * never XIP_CTRL.  We re-enable cache after each flash op.
+ * Use the SET alias (base + 0x2000) for atomic bit-set without RMW. */
+#define MOKYA_XIP_CTRL_SET  (*(volatile uint32_t *)0x400CA000u)
+#define MOKYA_XIP_CACHE_EN  0x00000003u  /* EN_SECURE | EN_NONSECURE */
+
 /* Provided by the --wrap linker mechanism */
 extern void __real_flash_range_erase(uint32_t flash_offs, size_t count);
 extern void __real_flash_range_program(uint32_t flash_offs,
@@ -82,6 +90,7 @@ void __no_inline_not_in_flash_func(__wrap_flash_range_erase)(
     uint32_t saved;
     mokya_flash_park_core1(&saved);
     __real_flash_range_erase(flash_offs, count);
+    MOKYA_XIP_CTRL_SET = MOKYA_XIP_CACHE_EN;  /* re-enable cache */
     mokya_flash_unpark_core1(saved);
 }
 
@@ -91,5 +100,6 @@ void __no_inline_not_in_flash_func(__wrap_flash_range_program)(
     uint32_t saved;
     mokya_flash_park_core1(&saved);
     __real_flash_range_program(flash_offs, data, count);
+    MOKYA_XIP_CTRL_SET = MOKYA_XIP_CACHE_EN;  /* re-enable cache */
     mokya_flash_unpark_core1(saved);
 }
