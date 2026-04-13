@@ -21,6 +21,9 @@
 #include "Observer.h"
 #include "sleep.h"
 
+/* Pico SDK RP2350 — provides scb_hw (armv8m_scb_hw_t) and M33_SHCSR_* bit defs. */
+#include "hardware/structs/scb.h"
+
 #define MOKYA_CORE1_VECTOR_TABLE   0x10200000u
 #define MOKYA_CORE1_SENTINEL_ADDR  0x20078000u
 // Debug breadcrumbs — four 32-bit slots read back over SWD after boot.
@@ -62,6 +65,21 @@ static RebootNotifier s_reboot_notifier;
 
 extern "C" void initVariant()
 {
+    /* ── P2-7 fix: MSP stack overflow guard ────────────────────────────────
+     * Core 0 MSP starts at 0x20082000 (top of SCRATCH_Y) and grows down
+     * through SCRATCH_Y + SCRATCH_X (8 KB total, ending at 0x20080000).
+     * Below that lies the shared IPC region (0x2007A000..0x20080000).
+     *
+     * Set the Cortex-M33 MSPLIM register to the bottom of SCRATCH_X so
+     * any MSP push past 0x20080000 triggers a UsageFault (STKOF) instead
+     * of silently corrupting the IPC ring or breadcrumb area.
+     *
+     * Enable UsageFault + MemManage so overflow faults are reported at
+     * their own priority level (easier to diagnose via SWD than a generic
+     * HardFault escalation). */
+    __asm volatile ("MSR msplim, %0" : : "r" (0x20080000u));
+    scb_hw->shcsr |= M33_SHCSR_USGFAULTENA_BITS | M33_SHCSR_MEMFAULTENA_BITS;
+
     volatile uint32_t *const sentinel =
         reinterpret_cast<volatile uint32_t *>(MOKYA_CORE1_SENTINEL_ADDR);
     volatile uint32_t *const dbg =
