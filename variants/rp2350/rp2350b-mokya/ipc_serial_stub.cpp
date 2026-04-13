@@ -102,6 +102,7 @@ size_t IpcSerialStream::write(const uint8_t *buf, size_t len)
         for (;;) {
             pushed = ipc_ring_push(&g_ipc_shared.c0_to_c1_ctrl,
                                    g_ipc_shared.c0_to_c1_slots,
+                                   IPC_RING_SLOT_COUNT,
                                    IPC_MSG_SERIAL_BYTES,
                                    tx_seq_,
                                    buf + written,
@@ -131,24 +132,21 @@ void IpcSerialStream::flush_tx_acc_()
 {
     if (tx_acc_len_ == 0u) return;
 
-    const uint32_t deadline = millis() + kWriteBusyWaitMs;
-    bool pushed = false;
-    for (;;) {
-        pushed = ipc_ring_push(&g_ipc_shared.c0_to_c1_ctrl,
-                                g_ipc_shared.c0_to_c1_slots,
+    // Log bytes go to the dedicated log ring — best-effort, single attempt,
+    // no busy-wait.  If the log ring is full the bytes are silently dropped.
+    // This keeps log output from contending with protobuf data on the main
+    // data ring (see docs/design-notes/ipc-ram-replan.md §2.1).
+    bool pushed = ipc_ring_push(&g_ipc_shared.c0_log_to_c1_ctrl,
+                                g_ipc_shared.c0_log_to_c1_slots,
+                                IPC_LOG_RING_SLOT_COUNT,
                                 IPC_MSG_SERIAL_BYTES,
                                 tx_seq_,
                                 tx_acc_,
                                 tx_acc_len_);
-        if (pushed) break;
-        if ((int32_t)(millis() - deadline) >= 0) break;
-        yield();
-    }
     if (pushed) {
         tx_seq_++;
         multicore_doorbell_set_other_core(IPC_DOORBELL_NUM);
     }
-    // Clear even on failure — stale log bytes are not worth blocking for.
     tx_acc_len_ = 0u;
 }
 
@@ -160,6 +158,7 @@ bool IpcSerialStream::refill_rx_()
     IpcMsgHeader hdr;
     if (!ipc_ring_pop(&g_ipc_shared.c1_to_c0_ctrl,
                       g_ipc_shared.c1_to_c0_slots,
+                      IPC_RING_SLOT_COUNT,
                       &hdr,
                       rx_buf_,
                       sizeof(rx_buf_))) {

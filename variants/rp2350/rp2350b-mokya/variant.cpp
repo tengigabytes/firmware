@@ -46,6 +46,7 @@ struct RebootNotifier {
         /* Push zero-payload reboot notification to the c0→c1 ring. */
         (void)ipc_ring_push(&g_ipc_shared.c0_to_c1_ctrl,
                             g_ipc_shared.c0_to_c1_slots,
+                            IPC_RING_SLOT_COUNT,
                             IPC_MSG_REBOOT_NOTIFY,
                             0u,      /* seq */
                             nullptr, /* payload */
