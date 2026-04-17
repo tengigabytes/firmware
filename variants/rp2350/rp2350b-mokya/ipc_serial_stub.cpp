@@ -23,22 +23,10 @@ IpcSerialStream Serial;
 // matches the ADR-4 target.
 static constexpr uint32_t kWriteBusyWaitMs = 50;
 
-/* ── Debug breadcrumbs (SWD-readable) ──────────────────────────────────── */
-/* Debug breadcrumbs in shared IPC tail pad (outside both cores' heap).
- * 0x2007FFE0: available() call count
- * 0x2007FFE4: refill_rx_() call count
- * 0x2007FFE8: refill_rx_() pop success count
- * 0x2007FFEC: refill_rx_() SERIAL_BYTES hit count */
-static volatile uint32_t &dbg_avail_count  = *reinterpret_cast<volatile uint32_t*>(0x2007FFE0u);
-static volatile uint32_t &dbg_refill_count = *reinterpret_cast<volatile uint32_t*>(0x2007FFE4u);
-static volatile uint32_t &dbg_pop_ok_count = *reinterpret_cast<volatile uint32_t*>(0x2007FFE8u);
-static volatile uint32_t &dbg_serial_count = *reinterpret_cast<volatile uint32_t*>(0x2007FFECu);
-
 /* ── Public Stream API ─────────────────────────────────────────────────── */
 
 int IpcSerialStream::available()
 {
-    dbg_avail_count++;
     if (rx_pos_ < rx_len_) {
         return rx_len_ - rx_pos_;
     }
@@ -154,7 +142,6 @@ void IpcSerialStream::flush_tx_acc_()
 
 bool IpcSerialStream::refill_rx_()
 {
-    dbg_refill_count++;
     IpcMsgHeader hdr;
     if (!ipc_ring_pop(&g_ipc_shared.c1_to_c0_ctrl,
                       g_ipc_shared.c1_to_c0_slots,
@@ -164,7 +151,6 @@ bool IpcSerialStream::refill_rx_()
                       sizeof(rx_buf_))) {
         return false;
     }
-    dbg_pop_ok_count++;
 
     if (hdr.msg_id != IPC_MSG_SERIAL_BYTES) {
         // Non-bytes messages (e.g. IPC_MSG_LOG_LINE) are not consumed by
@@ -175,7 +161,6 @@ bool IpcSerialStream::refill_rx_()
         return false;
     }
 
-    dbg_serial_count++;
     rx_len_ = hdr.payload_len;
     rx_pos_ = 0;
     return rx_len_ > 0;
