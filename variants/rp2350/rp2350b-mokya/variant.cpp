@@ -26,9 +26,10 @@
 #include "hardware/structs/scb.h"
 #include "hardware/structs/qmi.h"
 #include "hardware/regs/qmi.h"
-#include "hardware/regs/pads_qspi.h"
-#include "hardware/structs/pads_qspi.h"
 #include "hardware/sync.h"
+/* hardware/xip_cache.h isn't on Arduino-Pico's variant include path, so we
+ * open-code the RP2350 invalidate-by-set-way sequence in
+ * mokya_xip_cache_invalidate_all() below. */
 
 #define MOKYA_CORE1_VECTOR_TABLE   0x10200000u
 #define MOKYA_CORE1_SENTINEL_ADDR  0x20078000u
@@ -70,33 +71,73 @@ struct RebootNotifier {
 
 static RebootNotifier s_reboot_notifier;
 
-/* ── P2-16 helper: retime M0 (flash) from bootrom CLKDIV=3/25 MHz to
- * CLKDIV=1/75 MHz. Must run from RAM: changing M0.timing has a tiny
- * window where an instruction fetch could land on the old timing while
- * the next one sees the new timing, and if we were executing from
- * flash we'd risk an IBUSERR. Direct-mode bracketing pauses XIP for
- * the duration so any speculative fetch is stalled, not faulted.
+/* RP2350 XIP cache invalidate-by-set-way, open-coded because
+ * hardware/xip_cache.h isn't on Arduino-Pico's variant include path.
+ * Byte-equivalent to pico-sdk xip_cache_invalidate_all():
+ *   - XIP_MAINTENANCE_BASE = 0x18000000
+ *   - XIP_END  - XIP_BASE  = 0x04000000  (64 MB XIP address space)
+ *   - XIP_CACHE_SIZE       = 0x00004000  (16 KB)
+ *   - XIP_CACHE_LINE_SIZE  = 8
+ *   - op = XIP_CACHE_INVALIDATE_BY_SET_WAY = 0
  *
- * RXDELAY=2 matches Arduino-Pico's rxdelay=divisor heuristic. COOLDOWN
- * is left at 1 (bootrom default); MIN_DESELECT is preserved via the
- * mask so we don't accidentally shrink the CS-high gap. Verified by
- * bringup flash_pad_ablation: this timing + SLEWFAST=1 passes the
- * CLKDIV=1 stress at 42.8 MB/s uncached / 44.4 MB/s cached. */
-static void __no_inline_not_in_flash_func(flash_retime_clkdiv1)(void)
+ * The range-start at (XIP_CACHE_ADDRESS_SPACE_SIZE - XIP_CACHE_SIZE)
+ * mirrors the SDK's choice — keeps the maintenance addresses outside
+ * the downstream QMI range, matching the clean_all RP2350-E11 hint.
+ */
+static void __no_inline_not_in_flash_func(mokya_xip_cache_invalidate_all)(void)
+{
+    constexpr uintptr_t kMaintBase  = 0x18000000u;
+    constexpr uintptr_t kAddrSpace  = 0x04000000u; /* XIP_END - XIP_BASE */
+    constexpr uintptr_t kCacheSize  = 0x00004000u; /* 16 KB */
+    constexpr uintptr_t kLineSize   = 0x00000008u;
+    constexpr uintptr_t kOpInvalSW  = 0u;
+
+    uintptr_t start = kAddrSpace - kCacheSize;
+    uintptr_t end   = kAddrSpace;
+    for (uintptr_t off = start; off < end; off += kLineSize) {
+        *reinterpret_cast<volatile uint8_t *>(kMaintBase + off + kOpInvalSW) = 0;
+    }
+    __asm volatile("dsb sy" ::: "memory");
+    __asm volatile("isb" ::: "memory");
+}
+
+/* P2-16: retime flash M0 from bootrom CLKDIV=3 (25 MHz) to CLKDIV=2
+ * (37.5 MHz). RXDELAY=2 follows Arduino-Pico's RXDELAY=CLKDIV heuristic;
+ * other M0.timing fields are preserved via the mask so we inherit the
+ * bootrom's MAX_SELECT / MIN_DESELECT / PAGEBREAK / SELECT_* defaults.
+ * Pads are left at bootrom defaults (4 mA, SLEWFAST=0) — CLKDIV=2 has
+ * enough timing margin that no pad boost is needed.
+ *
+ * Must run from RAM: direct_csr.EN pauses XIP around the timing write
+ * so a concurrent instruction fetch can't land on a half-applied value,
+ * and the function body itself must therefore live outside flash.
+ * xip_cache_invalidate_all after the switch purges any lines that were
+ * populated under the old timing, so the caller's first post-return
+ * fetch cold-misses cleanly at the new timing.
+ *
+ * Why not CLKDIV=1 / 75 MHz: bringup's linear + 100 k random cached
+ * scans both show 0 errors at CLKDIV=1 + 8 mA + SLEWFAST, but a 1 M
+ * random scan reveals a ~10⁻⁵ transient cache-line-fill error rate that
+ * production reproducibly hits within seconds of boot (HardFault inside
+ * FreeRTOS scheduler start). The 1.8 V W25Q128JW on this Rev A routing
+ * simply doesn't meet setup/hold at 75 MHz reliably. Full investigation
+ * in docs/bringup/phase2-log.md P2-16.
+ */
+static void __no_inline_not_in_flash_func(flash_retime_m0)(void)
 {
     const uint32_t kMask = QMI_M0_TIMING_COOLDOWN_BITS |
                            QMI_M0_TIMING_RXDELAY_BITS |
                            QMI_M0_TIMING_CLKDIV_BITS;
     const uint32_t kNew = (1u << QMI_M0_TIMING_COOLDOWN_LSB) |
                           (2u << QMI_M0_TIMING_RXDELAY_LSB) |
-                          (1u << QMI_M0_TIMING_CLKDIV_LSB);
+                          (2u << QMI_M0_TIMING_CLKDIV_LSB);
     uint32_t timing = (qmi_hw->m[0].timing & ~kMask) | kNew;
 
     uint32_t irq_save = save_and_disable_interrupts();
     hw_set_bits(&qmi_hw->direct_csr, QMI_DIRECT_CSR_EN_BITS);
     qmi_hw->m[0].timing = timing;
     hw_clear_bits(&qmi_hw->direct_csr, QMI_DIRECT_CSR_EN_BITS);
-    __asm volatile("dsb sy" ::: "memory");
+    mokya_xip_cache_invalidate_all();
     restore_interrupts(irq_save);
 }
 
@@ -111,53 +152,10 @@ extern "C" void initVariant()
      * (e.g. WRITABLE_M1 set by psram_init). */
     *reinterpret_cast<volatile uint32_t *>(0x400CA000u) = 0x00000003u;
 
-    /* ── P2-16 fix: retime flash from bootrom CLKDIV=3 (25 MHz) to
-     * CLKDIV=1 (75 MHz).  Two parts:
-     *
-     *   1. Enable SLEWFAST on the QSPI_SCLK pad via the atomic SET alias.
-     *      Bringup ablation (flash_pad_ablation) showed this is the ONE
-     *      necessary pad change — DRIVE (4 mA default) and SD SCHMITT
-     *      don't affect pass/fail or throughput.  Slow slew eats ~3-5 ns
-     *      of the 13.3 ns period at 75 MHz, leaving no sampling margin;
-     *      fast slew shrinks the edge to ~1-2 ns.
-     *
-     *   2. Reprogram M0.timing with CLKDIV=1, RXDELAY=2 via the RAM-
-     *      resident helper above.
-     *
-     * Combined effect on cached flash read: 20.5 MB/s → 44 MB/s (+117%).
-     * Instruction fetch latency for Core 0 Meshtastic likewise improves,
-     * and Core 1 (launched later in this function) inherits the new
-     * timing because it shares the same QMI M0 window for flash XIP. */
-    /* P2-16 investigation: NOT shipped at CLKDIV=1. Summary:
-     *
-     *  - Bringup flash_deep_ablation (XOR-verified 16 MB at 4 pad
-     *    configs, all at CLKDIV=1+RXDELAY=2) confirms DRIVE=8 mA +
-     *    SLEWFAST=1 is the minimum pad set: 0/256 bad blocks.
-     *    The earlier 2³ flash_pad_ablation that said "SLEWFAST alone"
-     *    was a false positive from a one-word sentinel check.
-     *
-     *  - Enabling DRIVE=8mA + SLEWFAST=1 + CLKDIV=1 in production
-     *    *still* HardFaults inside FreeRTOS vStartFirstTask on boot,
-     *    despite bringup showing clean 16 MB reads under the same
-     *    register state. Suspect probabilistic / workload-dependent
-     *    failure: bringup single-pass deep_scan passes, but Meshtastic
-     *    boot path with concurrent Core 0 fetches + Core 1 launch
-     *    fetches occasionally drops a bit. The XOR oracle can miss
-     *    transient errors since baseline and CLKDIV=1 both may have
-     *    identical-but-wrong values for some cache line on any given
-     *    read.
-     *
-     *  - W25Q128JW is the 1.8 V variant. Forum reports on other
-     *    1.8 V custom boards (RP2040) had to drop to CLKDIV=4 for
-     *    reliability. Pico 2 ships with 3.3 V W25Q32RV and Pimoroni
-     *    Pico Plus 2 with 3.3 V W25Q128JV, both at CLKDIV=2 / 75 MHz.
-     *
-     * Decision: leave flash at the bootrom default (CLKDIV=3 / 25 MHz,
-     * no pad changes) until Rev B, which should use the 3.3 V JV
-     * variant or improved QSPI routing. The `flash_retime_clkdiv1`
-     * helper is left in the source unused so the bring-up toolkit +
-     * this comment can be revisited once the hardware allows. */
-    (void)flash_retime_clkdiv1;  /* keep symbol for future use */
+    /* ── P2-16: retime flash to CLKDIV=2 / 37.5 MHz (50 % over bootrom).
+     * See flash_retime_m0() above for the helper rationale and why
+     * CLKDIV=1 / 75 MHz is not viable on this Rev A. */
+    flash_retime_m0();
 
     /* ── P2-7 fix: MSP stack overflow guard ────────────────────────────────
      * Core 0 MSP starts at 0x20082000 (top of SCRATCH_Y) and grows down
