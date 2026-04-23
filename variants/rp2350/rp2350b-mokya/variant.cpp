@@ -192,6 +192,13 @@ extern "C" void initVariant()
     ipc_shared_init();
     dbg[0] = 0x11au;  // phase 1a: shared IPC zeroed + magic published
 
+    /* Phase 1.6: install SIO_IRQ_BELL listener so Core 1's LRU-persist
+     * flash writes can park Core 0 via IPC_FLASH_DOORBELL_C0. Must run
+     * BEFORE Core 1 is launched so the ISR vector is in place by the time
+     * Core 1's ime_task starts. Defined in flash_park_listener.c. */
+    extern void mokya_flash_park_listener_init(void);
+    mokya_flash_park_listener_init();
+
     // Core 1 image begins with a Cortex-M vector table at 0x10200000:
     //   word[0] = initial MSP
     //   word[1] = reset handler (Thumb bit set)
@@ -227,4 +234,11 @@ extern "C" void initVariant()
     // we notify Core 1 to disconnect USB before the watchdog fires.
     s_reboot_notifier.observer.observe(&notifyReboot);
     dbg[0] = 0x15u;  // phase 5: reboot observer registered
+
+    /* Phase 1.6: publish c0_ready so Core 1's flash_safety_wrap knows the
+     * SIO_IRQ_BELL listener is live and park requests will be serviced.
+     * Must be the last write in initVariant() — any earlier and Core 1
+     * could start requesting before our ISR was fully installed. */
+    __atomic_store_n(&g_ipc_shared.c0_ready, 1u, __ATOMIC_RELEASE);
+    dbg[0] = 0x16u;  // phase 6: c0_ready published
 }
