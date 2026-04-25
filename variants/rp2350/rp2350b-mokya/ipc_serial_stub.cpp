@@ -78,6 +78,14 @@ size_t IpcSerialStream::write(const uint8_t *buf, size_t len)
     // push the caller's buffer directly — no extra copy.
     flush_tx_acc_();
 
+    // Multi-byte writes are stream-framed protobuf packets (4-byte
+    // 0x94 0xC3 LEN_HI LEN_LO header + payload, all in one buf). The
+    // host's stream parser reads exactly LEN payload bytes after the
+    // header, so any chunk we drop here desynchronises every subsequent
+    // frame on the wire. Therefore: keep yielding until each chunk is
+    // pushed — never abort mid-frame. The c0_to_c1 ring is drained by
+    // Core 1 onto USB CDC; backpressure here ultimately reflects host
+    // CDC FIFO state, which the host itself controls.
     size_t written = 0;
     while (written < len) {
         const size_t remaining = len - written;
@@ -85,25 +93,19 @@ size_t IpcSerialStream::write(const uint8_t *buf, size_t len)
                                    ? static_cast<uint16_t>(IPC_MSG_PAYLOAD_MAX)
                                    : static_cast<uint16_t>(remaining);
 
-        const uint32_t deadline = millis() + kWriteBusyWaitMs;
-        bool pushed = false;
         for (;;) {
-            pushed = ipc_ring_push(&g_ipc_shared.c0_to_c1_ctrl,
-                                   g_ipc_shared.c0_to_c1_slots,
-                                   IPC_RING_SLOT_COUNT,
-                                   IPC_MSG_SERIAL_BYTES,
-                                   tx_seq_,
-                                   buf + written,
-                                   chunk);
+            const bool pushed = ipc_ring_push(&g_ipc_shared.c0_to_c1_ctrl,
+                                              g_ipc_shared.c0_to_c1_slots,
+                                              IPC_RING_SLOT_COUNT,
+                                              IPC_MSG_SERIAL_BYTES,
+                                              tx_seq_,
+                                              buf + written,
+                                              chunk);
             if (pushed) {
                 multicore_doorbell_set_other_core(IPC_DOORBELL_NUM);
                 break;
             }
-            if ((int32_t)(millis() - deadline) >= 0) break;
             yield();
-        }
-        if (!pushed) {
-            break;
         }
         tx_seq_++;
         written += chunk;
