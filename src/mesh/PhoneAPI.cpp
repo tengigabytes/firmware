@@ -227,12 +227,23 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
 {
     // Respond to heartbeat by sending queue status
     if (heartbeatReceived) {
+        // MokyaLora P2-19: do the LOG_DEBUG _before_ pb_encode_to_bytes,
+        // not after. When the StreamAPI subclass has switched to protobuf
+        // log encapsulation (SerialConsole::usingProtobufs == true), the
+        // LOG_DEBUG macro re-enters StreamAPI::emitLogRecord, which
+        // shares `fromRadioScratch` and `txBuf` with this very flow —
+        // logging after the encode therefore clobbers the just-encoded
+        // queue_status payload, leaving the caller's writeStream() loop
+        // to emit `numbytes` bytes of stale (now-log_record-shaped)
+        // bytes. The same upstream comment at line ~584 explains why
+        // the switch-statement path must not log between encode and
+        // return; the heartbeat fast-path was missing that discipline.
+        LOG_DEBUG("FromRadio=STATE_SEND_QUEUE_STATUS");
         memset(&fromRadioScratch, 0, sizeof(fromRadioScratch));
         fromRadioScratch.which_payload_variant = meshtastic_FromRadio_queueStatus_tag;
         fromRadioScratch.queueStatus = router->getQueueStatus();
         heartbeatReceived = false;
         size_t numbytes = pb_encode_to_bytes(buf, meshtastic_FromRadio_size, &meshtastic_FromRadio_msg, &fromRadioScratch);
-        LOG_DEBUG("FromRadio=STATE_SEND_QUEUE_STATUS, numbytes=%u", numbytes);
         return numbytes;
     }
 
