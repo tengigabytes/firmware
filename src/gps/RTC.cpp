@@ -151,8 +151,18 @@ RTCSetResult readFromRTC()
         uint32_t now = millis();
         uint32_t printableEpoch = tv.tv_sec; // Print lib only supports 32 bit but time_t can be 64 bit on some platforms
         LOG_DEBUG("Read RTC time as %ld", printableEpoch);
-        timeStartMsec = now;
-        zeroOffsetSecs = tv.tv_sec;
+        // MokyaLora P2-18: only seed timeStartMsec/zeroOffsetSecs from
+        // gettimeofday() when we don't already have higher-quality time.
+        // On RP2350 (no RTC chip, no settimeofday() in newlib) gettimeofday
+        // returns boot uptime, not wall clock — without this guard, the
+        // perhapsSetRTC() trailing readFromRTC() call would overwrite a
+        // freshly-set NTP/GPS epoch back to ~uptime seconds. Matches the
+        // existing currentQuality==None gate used by the RV3028/PCF8563/
+        // PCF85063/RX8130CE branches above.
+        if (currentQuality == RTCQualityNone) {
+            timeStartMsec = now;
+            zeroOffsetSecs = tv.tv_sec;
+        }
         return RTCSetResultSuccess;
     }
 #endif
