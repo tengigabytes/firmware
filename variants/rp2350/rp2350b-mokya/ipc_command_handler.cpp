@@ -158,6 +158,23 @@ bool mokya_tx_tracker_consume(uint32_t packet_id, uint8_t *out_seq)
     return tracker_consume(packet_id, out_seq);
 }
 
+/* Implemented in ipc_config_handler.cpp. Declared here so the dispatcher
+ * can route GET / SET / COMMIT to the soft-reload path. */
+extern "C" void mokya_handle_ipc_get_config(uint8_t seq, const uint8_t *payload, uint16_t len);
+extern "C" void mokya_handle_ipc_set_config(uint8_t seq, const uint8_t *payload, uint16_t len);
+extern "C" void mokya_handle_ipc_commit_config(uint8_t seq, const uint8_t *payload, uint16_t len);
+
+/* Thunk for ipc_config_handler.cpp — keeps that TU free of MeshService.h
+ * (which pulls a heavier dependency chain than we want there). The
+ * SEGMENT_CONFIG-only reload covers all LoRa fields per AdminModule:847
+ * "All LoRa radio changes apply live via configChanged observer". */
+extern "C" void mokya_meshservice_reload_config_segment_config(void)
+{
+    if (service) {
+        service->reloadConfig(SEGMENT_CONFIG);
+    }
+}
+
 extern "C" void mokya_handle_ipc_command(uint8_t msg_id,
                                          uint8_t ipc_seq,
                                          const uint8_t *payload,
@@ -166,6 +183,15 @@ extern "C" void mokya_handle_ipc_command(uint8_t msg_id,
     switch (msg_id) {
         case IPC_CMD_SEND_TEXT:
             handle_send_text(ipc_seq, payload, payload_len);
+            return;
+        case IPC_CMD_GET_CONFIG:
+            mokya_handle_ipc_get_config(ipc_seq, payload, payload_len);
+            return;
+        case IPC_CMD_SET_CONFIG:
+            mokya_handle_ipc_set_config(ipc_seq, payload, payload_len);
+            return;
+        case IPC_CMD_COMMIT_CONFIG:
+            mokya_handle_ipc_commit_config(ipc_seq, payload, payload_len);
             return;
         case IPC_MSG_LOG_LINE:
             /* Log lines from Core 1 historically went onto the same DATA
