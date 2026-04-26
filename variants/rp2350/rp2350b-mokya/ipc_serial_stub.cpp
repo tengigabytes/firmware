@@ -16,6 +16,13 @@
 #include <pico/multicore.h>
 #include <Arduino.h>
 
+/* Variant-provided dispatcher for non-SERIAL_BYTES messages on c1_to_c0
+ * (IPC_CMD_SEND_TEXT et al.). Defined in ipc_command_handler.cpp.
+ * Declared here so refill_rx_ doesn't drop those messages on the floor. */
+extern "C" void mokya_handle_ipc_command(uint8_t msg_id,
+                                         const uint8_t *payload,
+                                         uint16_t payload_len);
+
 IpcSerialStream Serial;
 
 // Maximum time to busy-wait on a full c0_to_c1 ring before giving up on a
@@ -155,9 +162,11 @@ bool IpcSerialStream::refill_rx_()
     }
 
     if (hdr.msg_id != IPC_MSG_SERIAL_BYTES) {
-        // Non-bytes messages (e.g. IPC_MSG_LOG_LINE) are not consumed by
-        // Stream::read(). For M1 we discard them so the bridge doesn't
-        // block; M4+ will route them into structured handlers.
+        // Non-bytes messages — route to the variant's structured-command
+        // dispatcher (M5 Phase 2: IPC_CMD_SEND_TEXT et al.) instead of
+        // dropping. The dispatcher is responsible for checking msg_id;
+        // unknown ids are silently ignored there.
+        mokya_handle_ipc_command(hdr.msg_id, rx_buf_, hdr.payload_len);
         rx_len_ = 0;
         rx_pos_ = 0;
         return false;
