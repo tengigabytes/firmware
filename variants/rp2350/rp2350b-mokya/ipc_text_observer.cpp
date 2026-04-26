@@ -72,6 +72,7 @@ IpcTextObserver s_text_observer;
 } // namespace
 
 extern "C" void mokya_register_ack_observer(void);
+extern "C" void mokya_register_node_observer(void);
 
 extern "C" void mokya_register_ipc_observers(void)
 {
@@ -88,4 +89,8 @@ extern "C" void mokya_register_ipc_observers(void)
      * meshModulesAvailable holds raw pointers and we need it to live
      * for the lifetime of the program. */
     mokya_register_ack_observer();
+
+    /* NodeDB observer — surface per-node updates to Core 1 so
+     * nodes_view can list mesh peers with SNR / hops / position. */
+    mokya_register_node_observer();
 }
