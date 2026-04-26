@@ -22,6 +22,11 @@
 #include "Observer.h"
 #include "sleep.h"
 
+#if defined(MOKYA_IPC_GPS_STREAM)
+#include "GPS.h"
+#include "ipc_gps_stream.h"
+#endif
+
 /* Pico SDK RP2350 — provides scb_hw (armv8m_scb_hw_t) and M33_SHCSR_* bit defs. */
 #include "hardware/structs/scb.h"
 #include "hardware/structs/qmi.h"
@@ -241,4 +246,10 @@ extern "C" void initVariant()
      * could start requesting before our ISR was fully installed. */
     __atomic_store_n(&g_ipc_shared.c0_ready, 1u, __ATOMIC_RELEASE);
     dbg[0] = 0x16u;  // phase 6: c0_ready published
+
+#if defined(MOKYA_IPC_GPS_STREAM)
+    /* M3.5: register the IpcGpsBuf-backed Stream with Meshtastic's GPS
+     * class. Must run before main.cpp setup() calls GPS::createGps(). */
+    GPS::setExternalSerial(&IpcGpsStream::instance());
+#endif
 }

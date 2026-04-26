@@ -42,7 +42,12 @@ template <typename T, std::size_t N> std::size_t array_count(const T (&)[N])
 #define GPS_SERIAL_PORT Serial1
 #endif
 
-#if defined(ARCH_NRF52)
+#if defined(MOKYA_IPC_GPS_STREAM)
+/* MokyaLora variant: byte source is an in-memory IpcGpsBuf reader, assigned
+ * at runtime by initVariant() before GPS::createGps() runs. */
+Stream *GPS::_serial_gps = nullptr;
+void GPS::setExternalSerial(Stream *s) { _serial_gps = s; }
+#elif defined(ARCH_NRF52)
 Uart *GPS::_serial_gps = &GPS_SERIAL_PORT;
 #elif defined(ARCH_ESP32) || defined(ARCH_PORTDUINO) || defined(ARCH_STM32WL)
 HardwareSerial *GPS::_serial_gps = &GPS_SERIAL_PORT;
@@ -530,7 +535,15 @@ bool GPS::setup()
         if (gnssModel != GNSS_MODEL_UNKNOWN) {
             setConnected();
         } else {
+#if defined(MOKYA_IPC_GPS_STREAM)
+            /* No probe ran (tx_gpio = 0) but the byte source is a known-good
+             * IpcGpsBuf NMEA stream. Treat it as a generic NMEA chip so
+             * setup() can proceed instead of looping every 2 s on the
+             * "unknown chip" guard. */
+            setConnected();
+#else
             return false;
+#endif
         }
 
         if (gnssModel == GNSS_MODEL_MTK) {
@@ -1274,7 +1287,10 @@ GnssModel_t GPS::probe(int serialSpeed)
 
     switch (currentStep) {
     case 0: {
-#if defined(ARCH_NRF52) || defined(ARCH_PORTDUINO) || defined(ARCH_STM32WL)
+#if defined(MOKYA_IPC_GPS_STREAM)
+        /* IpcGpsBuf has no baud rate; probe() is never called anyway because
+         * createGps() forces tx_gpio = 0. Keep the call-site compilable. */
+#elif defined(ARCH_NRF52) || defined(ARCH_PORTDUINO) || defined(ARCH_STM32WL)
         _serial_gps->end();
         _serial_gps->begin(serialSpeed);
 #elif defined(ARCH_RP2040)
@@ -1559,6 +1575,15 @@ std::unique_ptr<GPS> GPS::createGps()
     if (!_rx_gpio || !_serial_gps) // Configured to have no GPS at all
         return nullptr;
 
+#if defined(MOKYA_IPC_GPS_STREAM)
+    /* IpcGpsBuf is read-only and doesn't accept commands — force tx_gpio = 0
+     * so the chip-detect probe loop is skipped (its gate is `if (tx_gpio &&
+     * gnssModel == UNKNOWN)`). gnssModel stays UNKNOWN; whileActive() will
+     * still feed bytes to TinyGPSPlus and call setConnected() on first valid
+     * sentence (GPS.cpp ~line 1135). */
+    _tx_gpio = 0;
+#endif
+
     auto new_gps = std::unique_ptr<GPS>(new GPS());
     new_gps->rx_gpio = _rx_gpio;
     new_gps->tx_gpio = _tx_gpio;
@@ -1617,7 +1642,11 @@ std::unique_ptr<GPS> GPS::createGps()
         LOG_DEBUG("Use GPIO%d for GPS TX", new_gps->tx_gpio);
 
 //  ESP32 has a special set of parameters vs other arduino ports
-#if defined(ARCH_ESP32)
+#if defined(MOKYA_IPC_GPS_STREAM)
+        // No UART setup — _serial_gps is an in-memory stream backed by
+        // IpcGpsBuf in shared SRAM, populated by Core 1's NMEA writer.
+        (void)new_gps;
+#elif defined(ARCH_ESP32)
         _serial_gps->begin(GPS_BAUDRATE, SERIAL_8N1, new_gps->rx_gpio, new_gps->tx_gpio);
 #elif defined(ARCH_RP2040)
         _serial_gps->setPinout(new_gps->tx_gpio, new_gps->rx_gpio);

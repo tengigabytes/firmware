@@ -199,12 +199,24 @@ class GPS : private concurrency::OSThread
     CallbackObserver<GPS, void *> notifyDeepSleepObserver = CallbackObserver<GPS, void *>(this, &GPS::prepareDeepSleep);
 
     /** If !NULL we will use this serial port to construct our GPS */
-#if defined(ARCH_RP2040)
+#if defined(MOKYA_IPC_GPS_STREAM)
+    /* MokyaLora variant: NMEA stream is an in-memory IpcGpsBuf reader,
+     * not a hardware UART. Set via setExternalSerial() before createGps(). */
+    static Stream *_serial_gps;
+#elif defined(ARCH_RP2040)
     static SerialUART *_serial_gps;
 #elif defined(ARCH_NRF52)
     static Uart *_serial_gps;
 #else
     static HardwareSerial *_serial_gps;
+#endif
+
+#if defined(MOKYA_IPC_GPS_STREAM)
+  public:
+    /** MokyaLora variant: install an external NMEA byte source.
+     * Must be called before GPS::createGps() runs (in initVariant()). */
+    static void setExternalSerial(Stream *s);
+  private:
 #endif
 
     // Create a ublox packet for editing in memory
