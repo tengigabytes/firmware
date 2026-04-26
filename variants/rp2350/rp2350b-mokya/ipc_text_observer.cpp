@@ -71,6 +71,8 @@ IpcTextObserver s_text_observer;
 
 } // namespace
 
+extern "C" void mokya_register_ack_observer(void);
+
 extern "C" void mokya_register_ipc_observers(void)
 {
     static bool registered = false;
@@ -80,4 +82,10 @@ extern "C" void mokya_register_ipc_observers(void)
     if (textMessageModule) {
         s_text_observer.textMessageObserver.observe(textMessageModule);
     }
+
+    /* TX-ACK observer is a MeshModule subclass that auto-registers in
+     * meshModulesAvailable on construction. Allocated via new() because
+     * meshModulesAvailable holds raw pointers and we need it to live
+     * for the lifetime of the program. */
+    mokya_register_ack_observer();
 }

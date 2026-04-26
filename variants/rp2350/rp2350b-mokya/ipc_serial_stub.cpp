@@ -18,8 +18,11 @@
 
 /* Variant-provided dispatcher for non-SERIAL_BYTES messages on c1_to_c0
  * (IPC_CMD_SEND_TEXT et al.). Defined in ipc_command_handler.cpp.
- * Declared here so refill_rx_ doesn't drop those messages on the floor. */
+ * Declared here so refill_rx_ doesn't drop those messages on the floor.
+ * `ipc_seq` echoes IpcMsgHeader.seq so the dispatcher can correlate any
+ * later IPC_MSG_TX_ACK reply back to the originating CMD. */
 extern "C" void mokya_handle_ipc_command(uint8_t msg_id,
+                                         uint8_t ipc_seq,
                                          const uint8_t *payload,
                                          uint16_t payload_len);
 
@@ -166,7 +169,7 @@ bool IpcSerialStream::refill_rx_()
         // dispatcher (M5 Phase 2: IPC_CMD_SEND_TEXT et al.) instead of
         // dropping. The dispatcher is responsible for checking msg_id;
         // unknown ids are silently ignored there.
-        mokya_handle_ipc_command(hdr.msg_id, rx_buf_, hdr.payload_len);
+        mokya_handle_ipc_command(hdr.msg_id, hdr.seq, rx_buf_, hdr.payload_len);
         rx_len_ = 0;
         rx_pos_ = 0;
         return false;
