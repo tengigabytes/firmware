@@ -304,6 +304,10 @@ void printInfo()
 {
     LOG_INFO("S:B:%d,%s,%s,%s", HW_VENDOR, optstr(APP_VERSION), optstr(APP_ENV), optstr(APP_REPO));
 }
+#if defined(MOKYA_IPC_GPS_STREAM)
+extern "C" void mokya_register_ipc_observers(void);
+#endif
+
 #ifndef PIO_UNIT_TESTING
 void setup()
 {
@@ -897,6 +901,13 @@ void setup()
 
     // Now that the mesh service is created, create any modules
     setupModules();
+
+#if defined(MOKYA_IPC_GPS_STREAM)
+    /* MokyaLora variant: now that textMessageModule (and friends) exist,
+     * wire up the Core 0 → Core 1 IPC observers that forward incoming
+     * structured messages onto the c0_to_c1 ring. */
+    mokya_register_ipc_observers();
+#endif
 
 #if !MESHTASTIC_EXCLUDE_I2C
     // Inform modules about I2C devices
