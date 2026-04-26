@@ -187,32 +187,29 @@ extern "C" void initVariant()
     volatile uint32_t *const dbg =
         reinterpret_cast<volatile uint32_t *>(MOKYA_DBG_BASE);
 
-    /* Warm-boot detect — POC for Core-0-only watchdog reset.
+    /* Warm-boot detect REMOVED (2026-04-27).
      *
-     * If WATCHDOG_REASON is non-zero AND Core 1 had previously published
-     * c1_ready, treat this as a selective reboot of proc0 only. Core 1 is
-     * still running; we must NOT touch the cross-core handshake (would
-     * either wedge it via the SIO FIFO multicore_launch protocol or, worse,
-     * issue multicore_reset_core1 and hard-reset the very thing we wanted
-     * to keep alive).
+     * Originally added as a POC for Core-0-only watchdog reset (see
+     * docs/bringup/phase2-log.md "B2 — IPC config soft-reload" entry).
+     * The POC proved RP2350 bootrom unconditionally calls
+     * multicore_reset_core1 on every proc0 cold-boot regardless of
+     * WDSEL, so HW-level selective reset is infeasible.
      *
-     * Read both BEFORE touching anything else, especially before
-     * ipc_shared_init() which would otherwise wipe the c1_ready word we
-     * need to inspect.
+     * Worse, the warm-detect code itself caused regressions: under
+     * certain reset conditions it took the warm path and *skipped*
+     * multicore_launch_core1_raw, leaving Core 1 sitting in the bootrom
+     * mailbox handler indefinitely. That presented as Core 1 looking
+     * HardFaulted (PC stuck at 0x019E) and the SWD key-inject test
+     * pipeline timing out around char ~25-30.
+     *
+     * Strip the detect path; always cold-boot. If config-change
+     * soft-reset is needed, it goes through B2 (`reloadConfig`).
      */
-    const uint32_t wd_reason = *reinterpret_cast<volatile uint32_t *>(
-        WATCHDOG_BASE + WATCHDOG_REASON_OFFSET);
-    const uint32_t c1_ready_at_boot = g_ipc_shared.c1_ready;
-    const bool warm_reboot = (wd_reason != 0u) && (c1_ready_at_boot != 0u);
-
-    /* phase 1 marker: 0x11 = cold boot, 0x11b = warm reboot (selective). */
-    dbg[0] = warm_reboot ? 0x11bu : 0x11u;
+    dbg[0] = 0x11u;
     dbg[1] = 0;
     dbg[2] = 0;
     dbg[3] = 0;
-    if (!warm_reboot) {
-        *sentinel = 0u;
-    }
+    *sentinel = 0u;
     __asm volatile("dmb 0xF" ::: "memory");
 
     // Phase 2 M1.1: zero the shared-SRAM IPC region and publish IPC_BOOT_MAGIC
@@ -220,9 +217,7 @@ extern "C" void initVariant()
     // sees IPC_BOOT_MAGIC before touching any ring, so this ordering is the
     // handshake: if Core 1 ever sees bogus head/tail values it is this call
     // that failed to run.
-    if (!warm_reboot) {
-        ipc_shared_init();
-    }
+    ipc_shared_init();
     dbg[0] = 0x11au;  // phase 1a: shared IPC zeroed + magic published
 
     /* Phase 1.6: install SIO_IRQ_BELL listener so Core 1's LRU-persist
@@ -244,33 +239,24 @@ extern "C" void initVariant()
     dbg[2] = core1_entry;
     dbg[0] = 0x12u;  // phase 2: vector table read back
 
-    if (!warm_reboot) {
-        // Force Core 1 back into its bootrom FIFO handler before the handshake.
-        // In theory Core 1 is still in the handler on first boot, but with
-        // single-core FreeRTOS and unknown framework interaction this guarantees
-        // a clean handshake state and mirrors what restartCore1() does.
-        multicore_reset_core1();
-        dbg[0] = 0x12au;  // phase 2a: reset_core1 returned
+    // Force Core 1 back into its bootrom FIFO handler before the handshake.
+    // In theory Core 1 is still in the handler on first boot, but with
+    // single-core FreeRTOS and unknown framework interaction this guarantees
+    // a clean handshake state and mirrors what restartCore1() does.
+    multicore_reset_core1();
+    dbg[0] = 0x12au;  // phase 2a: reset_core1 returned
 
-        multicore_launch_core1_raw(
-            reinterpret_cast<void (*)(void)>(core1_entry),
-            reinterpret_cast<uint32_t *>(core1_sp),
-            MOKYA_CORE1_VECTOR_TABLE);
+    multicore_launch_core1_raw(
+        reinterpret_cast<void (*)(void)>(core1_entry),
+        reinterpret_cast<uint32_t *>(core1_sp),
+        MOKYA_CORE1_VECTOR_TABLE);
 
-        dbg[0] = 0x13u;  // phase 3: multicore_launch_core1_raw returned
+    dbg[0] = 0x13u;  // phase 3: multicore_launch_core1_raw returned
 
-        // Give Core 1 a brief window to write the sentinel, then snapshot it.
-        for (volatile int i = 0; i < 100000; ++i) { __asm volatile("nop"); }
-        dbg[3] = *sentinel;
-        dbg[0] = 0x14u;  // phase 4: sentinel snapshot captured
-    } else {
-        // Warm path: Core 1 is already running its own image. Skip the
-        // FIFO handshake (it would either deadlock waiting for replies or
-        // wedge Core 1 by writing into its mailbox). Just record that we
-        // observed Core 1 still alive at boot.
-        dbg[3] = *sentinel;  // snapshot whatever Core 1 last wrote
-        dbg[0] = 0x14bu;     // phase 4 warm: skipped handshake
-    }
+    // Give Core 1 a brief window to write the sentinel, then snapshot it.
+    for (volatile int i = 0; i < 100000; ++i) { __asm volatile("nop"); }
+    dbg[3] = *sentinel;
+    dbg[0] = 0x14u;  // phase 4: sentinel snapshot captured
 
     // Register reboot observer — when Meshtastic calls Power::reboot(),
     // we notify Core 1 to disconnect USB before the watchdog fires.
