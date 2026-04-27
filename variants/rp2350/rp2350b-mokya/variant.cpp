@@ -81,6 +81,16 @@ struct RebootNotifier {
 
 static RebootNotifier s_reboot_notifier;
 
+/* ── P2-11 race fix (deferred Core 1 launch) ─────────────────────────── */
+/* See comment in initVariant() at the multicore_reset_core1() call site
+ * for full rationale. Briefly: holding Core 1 in PSM reset until idle
+ * hook fires means Core 0's first boot-time flash ops (LittleFS format,
+ * NodeDB save, etc) complete with no Core 1 fetching from flash → no
+ * race against direct-mode flash protocol entered by ROM functions. */
+static volatile uint32_t s_core1_sp;
+static volatile uint32_t s_core1_entry;
+static volatile bool     s_core1_launched;
+
 /* RP2350 XIP cache invalidate-by-set-way, open-coded because
  * hardware/xip_cache.h isn't on Arduino-Pico's variant include path.
  * Byte-equivalent to pico-sdk xip_cache_invalidate_all():
@@ -239,24 +249,31 @@ extern "C" void initVariant()
     dbg[2] = core1_entry;
     dbg[0] = 0x12u;  // phase 2: vector table read back
 
-    // Force Core 1 back into its bootrom FIFO handler before the handshake.
-    // In theory Core 1 is still in the handler on first boot, but with
-    // single-core FreeRTOS and unknown framework interaction this guarantees
-    // a clean handshake state and mirrors what restartCore1() does.
+    // P2-11 race fix (2026-04-27): Core 1 launch is DEFERRED to first call
+    // of vApplicationIdleHook (i.e. after Meshtastic setup() completes).
+    // Reason: launching Core 1 here puts it into a window where Core 0 is
+    // about to do its first boot-time flash ops (LittleFS format on fresh
+    // boot, NodeDB save, etc). Core 0's flash_range_erase/program goes
+    // through the P2-11 wrap which parks Core 1 ONLY if c1_ready=1; but
+    // Core 1 hasn't reached the c1_ready setting code yet (it's still
+    // running .bss zero / .data copy / runtime_init / main()). Result:
+    // wrap fall-through, Core 1 fetches flash while Core 0 is in direct
+    // mode, IBUSERR HardFault on Core 1, USB CDC bridge dies for the
+    // entire boot session.
+    //
+    // By holding Core 1 in `multicore_reset_core1()` (PSM_FRCE_OFF.PROC1=1)
+    // until idle hook fires — which only happens after setup() completes
+    // and all boot-time flash ops are done — we eliminate the race entirely.
+    // The launch itself happens cleanly with Core 0 idle.
     multicore_reset_core1();
-    dbg[0] = 0x12au;  // phase 2a: reset_core1 returned
+    dbg[0] = 0x12au;  // phase 2a: reset_core1 returned (Core 1 held in reset)
 
-    multicore_launch_core1_raw(
-        reinterpret_cast<void (*)(void)>(core1_entry),
-        reinterpret_cast<uint32_t *>(core1_sp),
-        MOKYA_CORE1_VECTOR_TABLE);
+    /* Stash launch params for vApplicationIdleHook to pick up. */
+    s_core1_sp    = core1_sp;
+    s_core1_entry = core1_entry;
 
-    dbg[0] = 0x13u;  // phase 3: multicore_launch_core1_raw returned
-
-    // Give Core 1 a brief window to write the sentinel, then snapshot it.
-    for (volatile int i = 0; i < 100000; ++i) { __asm volatile("nop"); }
-    dbg[3] = *sentinel;
-    dbg[0] = 0x14u;  // phase 4: sentinel snapshot captured
+    dbg[0] = 0x13u;  // phase 3: launch params stashed (Core 1 launch deferred)
+    dbg[3] = 0u;     // sentinel snapshot N/A — Core 1 hasn't run yet
 
     // Register reboot observer — when Meshtastic calls Power::reboot(),
     // we notify Core 1 to disconnect USB before the watchdog fires.
@@ -279,4 +296,39 @@ extern "C" void initVariant()
     /* POC: arm Core-0-only watchdog reset N seconds after boot. No-op when
      * MOKYA_POC_C0_RESET is not defined. */
     mokya_poc_c0_reset_arm();
+
+    /* Boot counter for SWD-observable reboot verification.
+     * WATCHDOG.SCRATCH3 (0x400D8018) survives SYSRESETREQ + watchdog reset
+     * but is cleared on POR/BOR. Tests increment-and-read across reboot
+     * to verify graceful-reboot paths (e.g. IPC_CMD_COMMIT_REBOOT) actually
+     * fired — Meshtastic's `uptimeSeconds` field in MyNodeInfo is cached
+     * and doesn't refresh after reboot, making it unreliable for tests. */
+    *reinterpret_cast<volatile uint32_t *>(0x400D8018u) += 1;
+}
+
+/* ── P2-11 race fix: deferred Core 1 launch from FreeRTOS idle hook ──── */
+/* Called by FreeRTOS scheduler whenever no other Core 0 task is runnable.
+ * The first call only happens AFTER Meshtastic's setup() has finished —
+ * by that point all the boot-time flash ops (LittleFS init / format,
+ * NodeDB read, channel decode, etc) have completed safely. We launch
+ * Core 1 here to dodge the P2-11 race window entirely. */
+extern "C" void vApplicationIdleHook(void)
+{
+    if (s_core1_launched) return;
+    s_core1_launched = true;
+
+    volatile uint32_t *const dbg =
+        reinterpret_cast<volatile uint32_t *>(MOKYA_DBG_BASE);
+
+    /* Core 1 was held in PSM_FRCE_OFF.PROC1 since initVariant. Releasing
+     * via multicore_reset_core1() returns Core 1 to bootrom mailbox
+     * handler in a clean state. Then multicore_launch_core1_raw runs
+     * the standard 4-word handshake to start the Apache-2.0 image. */
+    multicore_reset_core1();
+    multicore_launch_core1_raw(
+        reinterpret_cast<void (*)(void)>(s_core1_entry),
+        reinterpret_cast<uint32_t *>(s_core1_sp),
+        MOKYA_CORE1_VECTOR_TABLE);
+
+    dbg[0] = 0x17u;  // phase 7: deferred Core 1 launch via idle hook
 }

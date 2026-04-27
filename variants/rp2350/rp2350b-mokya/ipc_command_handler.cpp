@@ -15,6 +15,7 @@
 #include "configuration.h"
 #include "MeshService.h"
 #include "Router.h"
+#include "main.h"
 #include "mesh/generated/meshtastic/mesh.pb.h"
 
 #include "ipc_protocol.h"
@@ -159,20 +160,50 @@ bool mokya_tx_tracker_consume(uint32_t packet_id, uint8_t *out_seq)
 }
 
 /* Implemented in ipc_config_handler.cpp. Declared here so the dispatcher
- * can route GET / SET / COMMIT to the soft-reload path. */
+ * can route GET / SET / COMMIT* to the appropriate handler. */
 extern "C" void mokya_handle_ipc_get_config(uint8_t seq, const uint8_t *payload, uint16_t len);
 extern "C" void mokya_handle_ipc_set_config(uint8_t seq, const uint8_t *payload, uint16_t len);
 extern "C" void mokya_handle_ipc_commit_config(uint8_t seq, const uint8_t *payload, uint16_t len);
+extern "C" void mokya_handle_ipc_commit_reboot(uint8_t seq, const uint8_t *payload, uint16_t len);
 
-/* Thunk for ipc_config_handler.cpp — keeps that TU free of MeshService.h
- * (which pulls a heavier dependency chain than we want there). The
- * SEGMENT_CONFIG-only reload covers all LoRa fields per AdminModule:847
- * "All LoRa radio changes apply live via configChanged observer". */
+/* Thunks for ipc_config_handler.cpp — keep that TU free of MeshService.h
+ * (which pulls a heavier dependency chain than we want there). */
+
+/* Generic reloadConfig — saveWhat is a bitmask of SEGMENT_* flags from
+ * NodeDB.h. Use SEGMENT_CONFIG for the LoRa/Device/Position/Power/Display
+ * paths, SEGMENT_CHANNELS for channel edits. Multiple bits OK. */
+extern "C" void mokya_meshservice_reload_config(uint32_t saveWhat)
+{
+    if (service && saveWhat != 0u) {
+        service->reloadConfig(static_cast<int>(saveWhat));
+    }
+}
+
+/* Legacy alias — kept so any external caller of the old name still links.
+ * New code should call mokya_meshservice_reload_config(SEGMENT_CONFIG). */
 extern "C" void mokya_meshservice_reload_config_segment_config(void)
 {
+    mokya_meshservice_reload_config(SEGMENT_CONFIG);
+}
+
+/* Owner reload — broadcasts updated owner.long_name / short_name to the mesh
+ * via NodeInfoModule. Saves SEGMENT_DEVICESTATE through reloadOwner's normal
+ * path. Pass shouldSave=true unless the caller is mid-edit-transaction. */
+extern "C" void mokya_meshservice_reload_owner(uint8_t shouldSave)
+{
     if (service) {
-        service->reloadConfig(SEGMENT_CONFIG);
+        service->reloadOwner(shouldSave != 0u);
     }
+}
+
+/* Schedule a graceful reboot. Setting rebootAtMsec triggers Power::reboot()
+ * from the main loop, which fires notifyReboot → RebootNotifier observer
+ * (variant.cpp:60) → IPC_MSG_REBOOT_NOTIFY to Core 1 → tud_disconnect()
+ * → watchdog reset. delay_ms gives the COMMIT_REBOOT reply time to clear
+ * the c0→c1 ring before the notify fires. */
+extern "C" void mokya_request_graceful_reboot(uint32_t delay_ms)
+{
+    rebootAtMsec = millis() + delay_ms;
 }
 
 extern "C" void mokya_handle_ipc_command(uint8_t msg_id,
@@ -192,6 +223,9 @@ extern "C" void mokya_handle_ipc_command(uint8_t msg_id,
             return;
         case IPC_CMD_COMMIT_CONFIG:
             mokya_handle_ipc_commit_config(ipc_seq, payload, payload_len);
+            return;
+        case IPC_CMD_COMMIT_REBOOT:
+            mokya_handle_ipc_commit_reboot(ipc_seq, payload, payload_len);
             return;
         case IPC_MSG_LOG_LINE:
             /* Log lines from Core 1 historically went onto the same DATA
