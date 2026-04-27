@@ -57,9 +57,14 @@ extern "C" void mokya_poc_c0_reset_arm(void);
  * before watchdog_reboot(). We push IPC_MSG_REBOOT_NOTIFY so Core 1 can
  * tud_disconnect() before the chip-wide reset yanks the USB controller. */
 
+extern "C" void mokya_pm_snapshot_graceful_reboot(void);
+
 struct RebootNotifier {
     int onReboot(void * /*arg*/)
     {
+        /* Tag the postmortem slot so a graceful reboot is distinguishable
+         * from a fault on the next boot. */
+        mokya_pm_snapshot_graceful_reboot();
         /* Pause the watchdog liveness chain — the 500 ms delay() below
          * stalls Core 0's heartbeat tick, and Power::reboot() will
          * shortly call watchdog_reboot() which is the legitimate path.
@@ -318,6 +323,13 @@ extern "C" void initVariant()
  * by that point all the boot-time flash ops (LittleFS init / format,
  * NodeDB read, channel decode, etc) have completed safely. We launch
  * Core 1 here to dodge the P2-11 race window entirely. */
+/* SWD-pokeable test hook — when set non-zero by a debugger, idle hook
+ * stops bumping c0_heartbeat. Lets us trigger the watchdog liveness
+ * chain on demand to verify the silence-detect → HW reset path. The
+ * symbol stays small, lives in BSS (zero by default → no behaviour
+ * change), and costs nothing in production. */
+volatile uint32_t g_mokya_wd_test_freeze_heartbeat = 0;
+
 extern "C" void vApplicationIdleHook(void)
 {
     /* Core 0 watchdog heartbeat — wd_task on Core 1 polls this counter
@@ -326,7 +338,9 @@ extern "C" void vApplicationIdleHook(void)
      * which under FreeRTOS happens many times per second; that is more
      * than fast enough for a 200 ms detection cadence. RELAXED is fine
      * — wd_task does not order any other memory access against this. */
-    __atomic_fetch_add(&g_ipc_shared.c0_heartbeat, 1u, __ATOMIC_RELAXED);
+    if (g_mokya_wd_test_freeze_heartbeat == 0u) {
+        __atomic_fetch_add(&g_ipc_shared.c0_heartbeat, 1u, __ATOMIC_RELAXED);
+    }
 
     if (s_core1_launched) return;
     s_core1_launched = true;
