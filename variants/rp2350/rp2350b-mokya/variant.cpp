@@ -60,6 +60,12 @@ extern "C" void mokya_poc_c0_reset_arm(void);
 struct RebootNotifier {
     int onReboot(void * /*arg*/)
     {
+        /* Pause the watchdog liveness chain — the 500 ms delay() below
+         * stalls Core 0's heartbeat tick, and Power::reboot() will
+         * shortly call watchdog_reboot() which is the legitimate path.
+         * No matching resume — the chip is about to reset. */
+        mokya_watchdog_pause();
+
         /* Push zero-payload reboot notification to the c0→c1 ring. */
         (void)ipc_ring_push(&g_ipc_shared.c0_to_c1_ctrl,
                             g_ipc_shared.c0_to_c1_slots,
@@ -314,6 +320,14 @@ extern "C" void initVariant()
  * Core 1 here to dodge the P2-11 race window entirely. */
 extern "C" void vApplicationIdleHook(void)
 {
+    /* Core 0 watchdog heartbeat — wd_task on Core 1 polls this counter
+     * every 200 ms and stops kicking the HW watchdog if it stalls for
+     * ≥ 4 s. Idle hook fires whenever Core 0 has nothing else to run,
+     * which under FreeRTOS happens many times per second; that is more
+     * than fast enough for a 200 ms detection cadence. RELAXED is fine
+     * — wd_task does not order any other memory access against this. */
+    __atomic_fetch_add(&g_ipc_shared.c0_heartbeat, 1u, __ATOMIC_RELAXED);
+
     if (s_core1_launched) return;
     s_core1_launched = true;
 

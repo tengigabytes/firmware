@@ -35,6 +35,7 @@
  * from this Pico SDK-level wrapper. Any layout change must update both. */
 #define MOKYA_C1_READY_ADDR    ((volatile uint32_t *)0x2007A008u)
 #define MOKYA_FLASH_LOCK_ADDR  ((volatile uint32_t *)0x2007A00Cu)
+#define MOKYA_WD_PAUSE_ADDR    ((volatile uint32_t *)0x2007A018u)
 
 #define MOKYA_FLASH_LOCK_IDLE    0u
 #define MOKYA_FLASH_LOCK_REQUEST 1u
@@ -88,18 +89,24 @@ void __no_inline_not_in_flash_func(__wrap_flash_range_erase)(
     uint32_t flash_offs, size_t count)
 {
     uint32_t saved;
+    /* Pause the watchdog liveness check across the flash op — Core 0's
+     * IRQ disable stalls the heartbeat tick that wd_task expects. */
+    __atomic_fetch_add(MOKYA_WD_PAUSE_ADDR, 1u, __ATOMIC_RELAXED);
     mokya_flash_park_core1(&saved);
     __real_flash_range_erase(flash_offs, count);
     MOKYA_XIP_CTRL_SET = MOKYA_XIP_CACHE_EN;  /* re-enable cache */
     mokya_flash_unpark_core1(saved);
+    __atomic_fetch_sub(MOKYA_WD_PAUSE_ADDR, 1u, __ATOMIC_RELAXED);
 }
 
 void __no_inline_not_in_flash_func(__wrap_flash_range_program)(
     uint32_t flash_offs, const uint8_t *data, size_t count)
 {
     uint32_t saved;
+    __atomic_fetch_add(MOKYA_WD_PAUSE_ADDR, 1u, __ATOMIC_RELAXED);
     mokya_flash_park_core1(&saved);
     __real_flash_range_program(flash_offs, data, count);
     MOKYA_XIP_CTRL_SET = MOKYA_XIP_CACHE_EN;  /* re-enable cache */
     mokya_flash_unpark_core1(saved);
+    __atomic_fetch_sub(MOKYA_WD_PAUSE_ADDR, 1u, __ATOMIC_RELAXED);
 }
