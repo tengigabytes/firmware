@@ -68,9 +68,11 @@ void push_value(uint8_t seq, uint16_t key, const void *val, uint16_t val_len)
      * future-proofs without bloating ring slot. */
     if (val_len > 64u) val_len = 64u;
     uint8_t buf[sizeof(IpcPayloadConfigValue) + 64u];
+    memset(buf, 0, sizeof(IpcPayloadConfigValue));   /* clear header _pad */
     auto *p = reinterpret_cast<IpcPayloadConfigValue *>(buf);
-    p->key       = key;
-    p->value_len = val_len;
+    p->key           = key;
+    p->value_len     = val_len;
+    p->channel_index = 0;   /* B3-P3 will set for 0x06xx channel keys */
     memcpy(p->value, val, val_len);
     (void)ipc_ring_push(&g_ipc_shared.c0_to_c1_ctrl,
                         g_ipc_shared.c0_to_c1_slots,
@@ -95,24 +97,51 @@ void push_result(uint8_t seq, uint16_t key, uint8_t result)
                         (uint16_t)sizeof(r));
 }
 
-bool decode_get(const uint8_t *payload, uint16_t len, uint16_t *out_key)
+/* Tolerate legacy 2-byte IpcPayloadGetConfig (no channel_index): if
+ * payload is exactly 2 bytes it is the legacy format and channel_index
+ * is implicitly 0. New 4-byte payload carries channel_index at offset 2. */
+bool decode_get(const uint8_t *payload, uint16_t len,
+                uint16_t *out_key, uint8_t *out_channel_index)
 {
-    if (len < sizeof(IpcPayloadGetConfig)) return false;
-    *out_key = reinterpret_cast<const IpcPayloadGetConfig *>(payload)->key;
+    if (len < 2u) return false;
+    *out_key = (uint16_t)payload[0] | ((uint16_t)payload[1] << 8);
+    *out_channel_index = (len >= 3u) ? payload[2] : 0u;
     return true;
 }
 
+/* Tolerate legacy 4-byte IpcPayloadConfigValue header (no channel_index):
+ * detect by comparing payload length against value_len + header_size for
+ * both legacy (4 B) and current (8 B) header sizes. New code emits the
+ * 8-byte form; legacy SWD test harnesses and B2-era scripts emit 4-byte. */
 bool decode_set(const uint8_t *payload, uint16_t len,
                 uint16_t *out_key,
+                uint8_t *out_channel_index,
                 const uint8_t **out_value, uint16_t *out_value_len)
 {
-    if (len < sizeof(IpcPayloadConfigValue)) return false;
-    const auto *p = reinterpret_cast<const IpcPayloadConfigValue *>(payload);
-    const uint16_t header = (uint16_t)sizeof(IpcPayloadConfigValue);
-    if ((uint32_t)header + p->value_len > (uint32_t)len) return false;
-    *out_key       = p->key;
-    *out_value     = p->value;
-    *out_value_len = p->value_len;
+    if (len < 4u) return false;
+    uint16_t key       = (uint16_t)payload[0] | ((uint16_t)payload[1] << 8);
+    uint16_t value_len = (uint16_t)payload[2] | ((uint16_t)payload[3] << 8);
+
+    constexpr uint16_t kLegacyHeader = 4u;
+    constexpr uint16_t kHeader       = (uint16_t)sizeof(IpcPayloadConfigValue);
+    static_assert(kHeader == 8u, "IpcPayloadConfigValue header size changed");
+
+    uint16_t header_used;
+    uint8_t  channel_index;
+    if ((uint32_t)kHeader + value_len <= (uint32_t)len) {
+        header_used   = kHeader;
+        channel_index = payload[4];
+    } else if ((uint32_t)kLegacyHeader + value_len <= (uint32_t)len) {
+        header_used   = kLegacyHeader;
+        channel_index = 0u;
+    } else {
+        return false;
+    }
+
+    *out_key           = key;
+    *out_channel_index = channel_index;
+    *out_value         = payload + header_used;
+    *out_value_len     = value_len;
     return true;
 }
 
@@ -234,10 +263,14 @@ extern "C" void mokya_handle_ipc_get_config(uint8_t seq,
                                             uint16_t len)
 {
     uint16_t key;
-    if (!decode_get(payload, len, &key)) {
+    uint8_t  channel_index;
+    if (!decode_get(payload, len, &key, &channel_index)) {
         push_result(seq, 0u, kResultInvalidValue);
         return;
     }
+    /* B3-P1: channel_index honoured only by 0x06xx keys (B3-P3 future).
+     * For now non-channel keys ignore it. */
+    (void)channel_index;
 
     uint8_t buf[64];
     uint16_t n = 0;
@@ -339,6 +372,161 @@ extern "C" void mokya_handle_ipc_get_config(uint8_t seq,
         push_value(seq, key, buf, n);
         return;
 
+    /* ── Device (B3-P1 expansion) ────────────────────────────────── */
+    case IPC_CFG_DEVICE_REBROADCAST_MODE: {
+        uint8_t v = (uint8_t)config.device.rebroadcast_mode;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+    case IPC_CFG_DEVICE_NODE_INFO_BCAST_SECS: {
+        uint32_t v = config.device.node_info_broadcast_secs;
+        push_value(seq, key, &v, sizeof(v));
+        return;
+    }
+    case IPC_CFG_DEVICE_DOUBLE_TAP_BTN: {
+        uint8_t v = config.device.double_tap_as_button_press ? 1u : 0u;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+    case IPC_CFG_DEVICE_DISABLE_TRIPLE_CLICK: {
+        uint8_t v = config.device.disable_triple_click ? 1u : 0u;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+    case IPC_CFG_DEVICE_TZDEF: {
+        size_t tz_len = strnlen(config.device.tzdef, sizeof(config.device.tzdef));
+        if (tz_len > sizeof(buf)) tz_len = sizeof(buf);
+        memcpy(buf, config.device.tzdef, tz_len);
+        push_value(seq, key, buf, (uint16_t)tz_len);
+        return;
+    }
+    case IPC_CFG_DEVICE_LED_HEARTBEAT_DISABLED: {
+        uint8_t v = config.device.led_heartbeat_disabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+
+    /* ── LoRa (B3-P1 expansion) ──────────────────────────────────── */
+    case IPC_CFG_LORA_USE_PRESET: {
+        uint8_t v = config.lora.use_preset ? 1u : 0u;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+    case IPC_CFG_LORA_BANDWIDTH: {
+        uint32_t v = (uint32_t)config.lora.bandwidth;   /* nanopb stores u16 */
+        push_value(seq, key, &v, sizeof(v));
+        return;
+    }
+    case IPC_CFG_LORA_SPREAD_FACTOR: {
+        uint32_t v = config.lora.spread_factor;
+        push_value(seq, key, &v, sizeof(v));
+        return;
+    }
+    case IPC_CFG_LORA_CODING_RATE: {
+        uint32_t v = (uint32_t)config.lora.coding_rate;  /* nanopb stores u8 */
+        push_value(seq, key, &v, sizeof(v));
+        return;
+    }
+    case IPC_CFG_LORA_TX_ENABLED: {
+        uint8_t v = config.lora.tx_enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+    case IPC_CFG_LORA_OVERRIDE_DUTY_CYCLE: {
+        uint8_t v = config.lora.override_duty_cycle ? 1u : 0u;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+    case IPC_CFG_LORA_SX126X_RX_BOOSTED_GAIN: {
+        uint8_t v = config.lora.sx126x_rx_boosted_gain ? 1u : 0u;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+    case IPC_CFG_LORA_FEM_LNA_MODE: {
+        uint8_t v = (uint8_t)config.lora.fem_lna_mode;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+
+    /* ── Position (B3-P1 expansion) ──────────────────────────────── */
+    case IPC_CFG_POSITION_BCAST_SMART_ENABLED: {
+        uint8_t v = config.position.position_broadcast_smart_enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+    case IPC_CFG_POSITION_FIXED_POSITION: {
+        uint8_t v = config.position.fixed_position ? 1u : 0u;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+    case IPC_CFG_POSITION_FLAGS: {
+        uint32_t v = config.position.position_flags;
+        push_value(seq, key, &v, sizeof(v));
+        return;
+    }
+    case IPC_CFG_POSITION_BCAST_SMART_MIN_DIST: {
+        uint32_t v = config.position.broadcast_smart_minimum_distance;
+        push_value(seq, key, &v, sizeof(v));
+        return;
+    }
+    case IPC_CFG_POSITION_BCAST_SMART_MIN_INT_SECS: {
+        uint32_t v = config.position.broadcast_smart_minimum_interval_secs;
+        push_value(seq, key, &v, sizeof(v));
+        return;
+    }
+
+    /* ── Display (B3-P1 expansion) ───────────────────────────────── */
+    case IPC_CFG_DISPLAY_AUTO_CAROUSEL_SECS: {
+        uint32_t v = config.display.auto_screen_carousel_secs;
+        push_value(seq, key, &v, sizeof(v));
+        return;
+    }
+    case IPC_CFG_DISPLAY_FLIP_SCREEN: {
+        uint8_t v = config.display.flip_screen ? 1u : 0u;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+    case IPC_CFG_DISPLAY_OLED: {
+        uint8_t v = (uint8_t)config.display.oled;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+    case IPC_CFG_DISPLAY_DISPLAYMODE: {
+        uint8_t v = (uint8_t)config.display.displaymode;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+    case IPC_CFG_DISPLAY_HEADING_BOLD: {
+        uint8_t v = config.display.heading_bold ? 1u : 0u;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+    case IPC_CFG_DISPLAY_WAKE_ON_TAP_OR_MOTION: {
+        uint8_t v = config.display.wake_on_tap_or_motion ? 1u : 0u;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+    case IPC_CFG_DISPLAY_COMPASS_ORIENTATION: {
+        uint8_t v = (uint8_t)config.display.compass_orientation;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+    case IPC_CFG_DISPLAY_USE_12H_CLOCK: {
+        uint8_t v = config.display.use_12h_clock ? 1u : 0u;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+    case IPC_CFG_DISPLAY_USE_LONG_NODE_NAME: {
+        uint8_t v = config.display.use_long_node_name ? 1u : 0u;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+    case IPC_CFG_DISPLAY_ENABLE_MESSAGE_BUBBLES: {
+        uint8_t v = config.display.enable_message_bubbles ? 1u : 0u;
+        push_value(seq, key, &v, 1u);
+        return;
+    }
+
     default:
         push_result(seq, key, kResultUnknownKey);
         return;
@@ -352,12 +540,14 @@ extern "C" void mokya_handle_ipc_set_config(uint8_t seq,
                                             uint16_t len)
 {
     uint16_t key;
+    uint8_t  channel_index;
     const uint8_t *val = nullptr;
     uint16_t vlen = 0u;
-    if (!decode_set(payload, len, &key, &val, &vlen)) {
+    if (!decode_set(payload, len, &key, &channel_index, &val, &vlen)) {
         push_result(seq, 0u, kResultInvalidValue);
         return;
     }
+    (void)channel_index;  /* honoured by 0x06xx keys (B3-P3) */
 
     /* Helper macros for the common scalar SET pattern. */
 #define REQ_LEN(n) do { if (vlen < (n)) { push_result(seq, key, kResultInvalidValue); return; } } while (0)
@@ -475,6 +665,209 @@ extern "C" void mokya_handle_ipc_set_config(uint8_t seq,
         return;
     case IPC_CFG_CHANNEL_PSK:
         if (!set_primary_channel_psk(val, vlen)) { push_result(seq, key, kResultInvalidValue); return; }
+        push_result(seq, key, kResultOK);
+        return;
+
+    /* ── Device (B3-P1 expansion) ────────────────────────────────── */
+    case IPC_CFG_DEVICE_REBROADCAST_MODE:
+        REQ_LEN(1);
+        if (val[0] > 5u) { push_result(seq, key, kResultInvalidValue); return; }
+        config.device.rebroadcast_mode =
+            (decltype(config.device.rebroadcast_mode))val[0];
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_DEVICE_NODE_INFO_BCAST_SECS:
+        REQ_LEN(4);
+        config.device.node_info_broadcast_secs = *(const uint32_t *)val;
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_DEVICE_DOUBLE_TAP_BTN:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        config.device.double_tap_as_button_press = (val[0] != 0u);
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_DEVICE_DISABLE_TRIPLE_CLICK:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        config.device.disable_triple_click = (val[0] != 0u);
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_DEVICE_TZDEF: {
+        if (vlen >= sizeof(config.device.tzdef)) {
+            push_result(seq, key, kResultInvalidValue); return;
+        }
+        memcpy(config.device.tzdef, val, vlen);
+        config.device.tzdef[vlen] = '\0';
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    }
+    case IPC_CFG_DEVICE_LED_HEARTBEAT_DISABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        config.device.led_heartbeat_disabled = (val[0] != 0u);
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+
+    /* ── LoRa (B3-P1 expansion) ──────────────────────────────────── */
+    case IPC_CFG_LORA_USE_PRESET:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        config.lora.use_preset = (val[0] != 0u);
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_LORA_BANDWIDTH: {
+        REQ_LEN(4);
+        uint32_t v = *(const uint32_t *)val;
+        if (v > 0xFFFFu) { push_result(seq, key, kResultInvalidValue); return; }
+        config.lora.bandwidth = (uint16_t)v;
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    }
+    case IPC_CFG_LORA_SPREAD_FACTOR: {
+        REQ_LEN(4);
+        uint32_t v = *(const uint32_t *)val;
+        if (v < 7u || v > 12u) { push_result(seq, key, kResultInvalidValue); return; }
+        config.lora.spread_factor = v;
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    }
+    case IPC_CFG_LORA_CODING_RATE: {
+        REQ_LEN(4);
+        uint32_t v = *(const uint32_t *)val;
+        if (v < 5u || v > 8u) { push_result(seq, key, kResultInvalidValue); return; }
+        config.lora.coding_rate = (uint8_t)v;
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    }
+    case IPC_CFG_LORA_TX_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        config.lora.tx_enabled = (val[0] != 0u);
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_LORA_OVERRIDE_DUTY_CYCLE:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        config.lora.override_duty_cycle = (val[0] != 0u);
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_LORA_SX126X_RX_BOOSTED_GAIN:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        config.lora.sx126x_rx_boosted_gain = (val[0] != 0u);
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_LORA_FEM_LNA_MODE:
+        REQ_LEN(1);
+        if (val[0] > 2u) { push_result(seq, key, kResultInvalidValue); return; }
+        config.lora.fem_lna_mode =
+            (decltype(config.lora.fem_lna_mode))val[0];
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+
+    /* ── Position (B3-P1 expansion) ──────────────────────────────── */
+    case IPC_CFG_POSITION_BCAST_SMART_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        config.position.position_broadcast_smart_enabled = (val[0] != 0u);
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_POSITION_FIXED_POSITION:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        config.position.fixed_position = (val[0] != 0u);
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_POSITION_FLAGS:
+        REQ_LEN(4);
+        config.position.position_flags = *(const uint32_t *)val;
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_POSITION_BCAST_SMART_MIN_DIST:
+        REQ_LEN(4);
+        config.position.broadcast_smart_minimum_distance = *(const uint32_t *)val;
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_POSITION_BCAST_SMART_MIN_INT_SECS:
+        REQ_LEN(4);
+        config.position.broadcast_smart_minimum_interval_secs = *(const uint32_t *)val;
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+
+    /* ── Display (B3-P1 expansion) ───────────────────────────────── */
+    case IPC_CFG_DISPLAY_AUTO_CAROUSEL_SECS:
+        REQ_LEN(4);
+        config.display.auto_screen_carousel_secs = *(const uint32_t *)val;
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_DISPLAY_FLIP_SCREEN:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        config.display.flip_screen = (val[0] != 0u);
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_DISPLAY_OLED:
+        REQ_LEN(1);
+        if (val[0] > 4u) { push_result(seq, key, kResultInvalidValue); return; }
+        config.display.oled = (decltype(config.display.oled))val[0];
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_DISPLAY_DISPLAYMODE:
+        REQ_LEN(1);
+        if (val[0] > 3u) { push_result(seq, key, kResultInvalidValue); return; }
+        config.display.displaymode = (decltype(config.display.displaymode))val[0];
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_DISPLAY_HEADING_BOLD:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        config.display.heading_bold = (val[0] != 0u);
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_DISPLAY_WAKE_ON_TAP_OR_MOTION:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        config.display.wake_on_tap_or_motion = (val[0] != 0u);
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_DISPLAY_COMPASS_ORIENTATION:
+        REQ_LEN(1);
+        if (val[0] > 7u) { push_result(seq, key, kResultInvalidValue); return; }
+        config.display.compass_orientation =
+            (decltype(config.display.compass_orientation))val[0];
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_DISPLAY_USE_12H_CLOCK:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        config.display.use_12h_clock = (val[0] != 0u);
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_DISPLAY_USE_LONG_NODE_NAME:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        config.display.use_long_node_name = (val[0] != 0u);
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_DISPLAY_ENABLE_MESSAGE_BUBBLES:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        config.display.enable_message_bubbles = (val[0] != 0u);
+        s_pending_segments |= SEGMENT_CONFIG;
         push_result(seq, key, kResultOK);
         return;
 
