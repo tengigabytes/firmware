@@ -163,33 +163,28 @@ uint16_t copy_owner_short(uint8_t *out, uint16_t out_max)
     return (uint16_t)n;
 }
 
-uint16_t copy_primary_channel_name(uint8_t *out, uint16_t out_max)
+/* B3-P3: addressed by channel_index (0..MAX_NUM_CHANNELS-1). The pre-B3-P3
+ * helpers walked channelFile to find role==PRIMARY; that is now the
+ * caller's job (Core 1 settings UI passes the index it wants to read). */
+constexpr uint8_t kChannelMax = 8u;  /* matches MAX_NUM_CHANNELS / PHONEAPI_CHANNEL_COUNT */
+
+bool channel_index_valid(uint8_t channel_index)
 {
-    /* Primary channel = whichever has role=PRIMARY. Fallback to index 0. */
-    int idx = 0;
-    for (int i = 0; i < channelFile.channels_count; ++i) {
-        if (channelFile.channels[i].role == meshtastic_Channel_Role_PRIMARY) {
-            idx = i;
-            break;
-        }
-    }
-    const auto &ch = channelFile.channels[idx].settings;
+    return channel_index < kChannelMax;
+}
+
+uint16_t copy_channel_name(uint8_t channel_index, uint8_t *out, uint16_t out_max)
+{
+    const auto &ch = channelFile.channels[channel_index].settings;
     size_t n = strnlen(ch.name, sizeof(ch.name));
     if (n > out_max) n = out_max;
     memcpy(out, ch.name, n);
     return (uint16_t)n;
 }
 
-uint16_t copy_primary_channel_psk(uint8_t *out, uint16_t out_max)
+uint16_t copy_channel_psk(uint8_t channel_index, uint8_t *out, uint16_t out_max)
 {
-    int idx = 0;
-    for (int i = 0; i < channelFile.channels_count; ++i) {
-        if (channelFile.channels[i].role == meshtastic_Channel_Role_PRIMARY) {
-            idx = i;
-            break;
-        }
-    }
-    const auto &ch = channelFile.channels[idx].settings;
+    const auto &ch = channelFile.channels[channel_index].settings;
     uint16_t n = ch.psk.size;
     if (n > out_max) n = out_max;
     memcpy(out, ch.psk.bytes, n);
@@ -217,16 +212,9 @@ bool set_owner_short(const uint8_t *val, uint16_t vlen)
     return true;
 }
 
-bool set_primary_channel_name(const uint8_t *val, uint16_t vlen)
+bool set_channel_name(uint8_t channel_index, const uint8_t *val, uint16_t vlen)
 {
-    int idx = 0;
-    for (int i = 0; i < channelFile.channels_count; ++i) {
-        if (channelFile.channels[i].role == meshtastic_Channel_Role_PRIMARY) {
-            idx = i;
-            break;
-        }
-    }
-    auto &ch = channelFile.channels[idx].settings;
+    auto &ch = channelFile.channels[channel_index].settings;
     if (vlen >= sizeof(ch.name)) return false;
     memcpy(ch.name, val, vlen);
     ch.name[vlen] = '\0';
@@ -234,16 +222,9 @@ bool set_primary_channel_name(const uint8_t *val, uint16_t vlen)
     return true;
 }
 
-bool set_primary_channel_psk(const uint8_t *val, uint16_t vlen)
+bool set_channel_psk(uint8_t channel_index, const uint8_t *val, uint16_t vlen)
 {
-    int idx = 0;
-    for (int i = 0; i < channelFile.channels_count; ++i) {
-        if (channelFile.channels[i].role == meshtastic_Channel_Role_PRIMARY) {
-            idx = i;
-            break;
-        }
-    }
-    auto &ch = channelFile.channels[idx].settings;
+    auto &ch = channelFile.channels[channel_index].settings;
     if (vlen > sizeof(ch.psk.bytes)) return false;
     /* Valid PSK lengths: 0 (no encryption), 1 (preset key shorthand),
      * 16 (AES-128), 32 (AES-256). Everything else is invalid. */
@@ -268,9 +249,12 @@ extern "C" void mokya_handle_ipc_get_config(uint8_t seq,
         push_result(seq, 0u, kResultInvalidValue);
         return;
     }
-    /* B3-P1: channel_index honoured only by 0x06xx keys (B3-P3 future).
-     * For now non-channel keys ignore it. */
-    (void)channel_index;
+    /* channel_index honoured only by 0x06xx Channel keys (B3-P3). For
+     * non-channel keys it is ignored. */
+    if ((key & 0xFF00u) == 0x0600u && !channel_index_valid(channel_index)) {
+        push_result(seq, key, kResultInvalidValue);
+        return;
+    }
 
     uint8_t buf[64];
     uint16_t n = 0;
@@ -362,13 +346,13 @@ extern "C" void mokya_handle_ipc_get_config(uint8_t seq,
         return;
     }
 
-    /* Channel (primary) */
+    /* Channel (B3-P3 — addressed by channel_index 0..7) */
     case IPC_CFG_CHANNEL_NAME:
-        n = copy_primary_channel_name(buf, sizeof(buf));
+        n = copy_channel_name(channel_index, buf, sizeof(buf));
         push_value(seq, key, buf, n);
         return;
     case IPC_CFG_CHANNEL_PSK:
-        n = copy_primary_channel_psk(buf, sizeof(buf));
+        n = copy_channel_psk(channel_index, buf, sizeof(buf));
         push_value(seq, key, buf, n);
         return;
 
@@ -500,13 +484,13 @@ extern "C" void mokya_handle_ipc_get_config(uint8_t seq,
         push_value(seq, key, &v, sizeof(v)); return;
     }
 
-    /* ── Channel module_settings (B3-P2; Channel[0] only) ────────── */
+    /* ── Channel module_settings (B3-P3 — addressed by channel_index) ── */
     case IPC_CFG_CHANNEL_MODULE_POSITION_PRECISION: {
-        uint32_t v = channelFile.channels[0].settings.module_settings.position_precision;
+        uint32_t v = channelFile.channels[channel_index].settings.module_settings.position_precision;
         push_value(seq, key, &v, sizeof(v)); return;
     }
     case IPC_CFG_CHANNEL_MODULE_IS_MUTED: {
-        uint8_t v = channelFile.channels[0].settings.module_settings.is_muted ? 1u : 0u;
+        uint8_t v = channelFile.channels[channel_index].settings.module_settings.is_muted ? 1u : 0u;
         push_value(seq, key, &v, 1u); return;
     }
 
@@ -598,6 +582,68 @@ extern "C" void mokya_handle_ipc_get_config(uint8_t seq,
         return;
     }
 
+    /* ── ModuleConfig.Telemetry (B3-P3) ──────────────────────────── */
+    case IPC_CFG_TELEM_DEVICE_UPDATE_INTERVAL: {
+        uint32_t v = moduleConfig.telemetry.device_update_interval;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_TELEM_ENV_UPDATE_INTERVAL: {
+        uint32_t v = moduleConfig.telemetry.environment_update_interval;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_TELEM_ENV_MEASUREMENT_ENABLED: {
+        uint8_t v = moduleConfig.telemetry.environment_measurement_enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_TELEM_ENV_SCREEN_ENABLED: {
+        uint8_t v = moduleConfig.telemetry.environment_screen_enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_TELEM_ENV_DISPLAY_FAHRENHEIT: {
+        uint8_t v = moduleConfig.telemetry.environment_display_fahrenheit ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_TELEM_POWER_MEASUREMENT_ENABLED: {
+        uint8_t v = moduleConfig.telemetry.power_measurement_enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_TELEM_POWER_UPDATE_INTERVAL: {
+        uint32_t v = moduleConfig.telemetry.power_update_interval;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_TELEM_POWER_SCREEN_ENABLED: {
+        uint8_t v = moduleConfig.telemetry.power_screen_enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_TELEM_DEVICE_TELEM_ENABLED: {
+        uint8_t v = moduleConfig.telemetry.device_telemetry_enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+
+    /* ── ModuleConfig.NeighborInfo (B3-P3) ───────────────────────── */
+    case IPC_CFG_NEIGHBOR_ENABLED: {
+        uint8_t v = moduleConfig.neighbor_info.enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_NEIGHBOR_UPDATE_INTERVAL: {
+        uint32_t v = moduleConfig.neighbor_info.update_interval;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_NEIGHBOR_TRANSMIT_OVER_LORA: {
+        uint8_t v = moduleConfig.neighbor_info.transmit_over_lora ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+
+    /* ── ModuleConfig.RangeTest (B3-P3) ──────────────────────────── */
+    case IPC_CFG_RANGETEST_ENABLED: {
+        uint8_t v = moduleConfig.range_test.enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_RANGETEST_SENDER: {
+        uint32_t v = moduleConfig.range_test.sender;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+
     default:
         push_result(seq, key, kResultUnknownKey);
         return;
@@ -618,7 +664,12 @@ extern "C" void mokya_handle_ipc_set_config(uint8_t seq,
         push_result(seq, 0u, kResultInvalidValue);
         return;
     }
-    (void)channel_index;  /* honoured by 0x06xx keys (B3-P3) */
+    /* channel_index honoured only by 0x06xx Channel keys (B3-P3). For
+     * non-channel keys it is ignored. */
+    if ((key & 0xFF00u) == 0x0600u && !channel_index_valid(channel_index)) {
+        push_result(seq, key, kResultInvalidValue);
+        return;
+    }
 
     /* Helper macros for the common scalar SET pattern. */
 #define REQ_LEN(n) do { if (vlen < (n)) { push_result(seq, key, kResultInvalidValue); return; } } while (0)
@@ -729,13 +780,13 @@ extern "C" void mokya_handle_ipc_set_config(uint8_t seq,
         push_result(seq, key, kResultOK);
         return;
 
-    /* Channel (primary) */
+    /* Channel (B3-P3 — addressed by channel_index 0..7) */
     case IPC_CFG_CHANNEL_NAME:
-        if (!set_primary_channel_name(val, vlen)) { push_result(seq, key, kResultInvalidValue); return; }
+        if (!set_channel_name(channel_index, val, vlen)) { push_result(seq, key, kResultInvalidValue); return; }
         push_result(seq, key, kResultOK);
         return;
     case IPC_CFG_CHANNEL_PSK:
-        if (!set_primary_channel_psk(val, vlen)) { push_result(seq, key, kResultInvalidValue); return; }
+        if (!set_channel_psk(channel_index, val, vlen)) { push_result(seq, key, kResultInvalidValue); return; }
         push_result(seq, key, kResultOK);
         return;
 
@@ -912,18 +963,18 @@ extern "C" void mokya_handle_ipc_set_config(uint8_t seq,
         return;
     }
 
-    /* ── Channel module_settings (B3-P2; Channel[0] only) ────────── */
+    /* ── Channel module_settings (B3-P3 — addressed by channel_index) ── */
     case IPC_CFG_CHANNEL_MODULE_POSITION_PRECISION:
         REQ_LEN(4);
-        channelFile.channels[0].settings.module_settings.position_precision = *(const uint32_t *)val;
-        channelFile.channels[0].settings.has_module_settings = true;
+        channelFile.channels[channel_index].settings.module_settings.position_precision = *(const uint32_t *)val;
+        channelFile.channels[channel_index].settings.has_module_settings = true;
         s_pending_segments |= SEGMENT_CHANNELS;
         push_result(seq, key, kResultOK);
         return;
     case IPC_CFG_CHANNEL_MODULE_IS_MUTED:
         REQ_LEN(1); REQ_BOOL_RANGE();
-        channelFile.channels[0].settings.module_settings.is_muted = (val[0] != 0u);
-        channelFile.channels[0].settings.has_module_settings = true;
+        channelFile.channels[channel_index].settings.module_settings.is_muted = (val[0] != 0u);
+        channelFile.channels[channel_index].settings.has_module_settings = true;
         s_pending_segments |= SEGMENT_CHANNELS;
         push_result(seq, key, kResultOK);
         return;
@@ -1034,6 +1085,115 @@ extern "C" void mokya_handle_ipc_set_config(uint8_t seq,
         REQ_LEN(1); REQ_BOOL_RANGE();
         config.display.enable_message_bubbles = (val[0] != 0u);
         s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+
+    /* ── ModuleConfig.Telemetry (B3-P3) ──────────────────────────── */
+    case IPC_CFG_TELEM_DEVICE_UPDATE_INTERVAL:
+        REQ_LEN(4);
+        moduleConfig.telemetry.device_update_interval = *(const uint32_t *)val;
+        moduleConfig.has_telemetry = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_TELEM_ENV_UPDATE_INTERVAL:
+        REQ_LEN(4);
+        moduleConfig.telemetry.environment_update_interval = *(const uint32_t *)val;
+        moduleConfig.has_telemetry = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_TELEM_ENV_MEASUREMENT_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.telemetry.environment_measurement_enabled = (val[0] != 0u);
+        moduleConfig.has_telemetry = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_TELEM_ENV_SCREEN_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.telemetry.environment_screen_enabled = (val[0] != 0u);
+        moduleConfig.has_telemetry = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_TELEM_ENV_DISPLAY_FAHRENHEIT:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.telemetry.environment_display_fahrenheit = (val[0] != 0u);
+        moduleConfig.has_telemetry = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_TELEM_POWER_MEASUREMENT_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.telemetry.power_measurement_enabled = (val[0] != 0u);
+        moduleConfig.has_telemetry = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_TELEM_POWER_UPDATE_INTERVAL:
+        REQ_LEN(4);
+        moduleConfig.telemetry.power_update_interval = *(const uint32_t *)val;
+        moduleConfig.has_telemetry = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_TELEM_POWER_SCREEN_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.telemetry.power_screen_enabled = (val[0] != 0u);
+        moduleConfig.has_telemetry = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_TELEM_DEVICE_TELEM_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.telemetry.device_telemetry_enabled = (val[0] != 0u);
+        moduleConfig.has_telemetry = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+
+    /* ── ModuleConfig.NeighborInfo (B3-P3) ────────────────────────
+     * AdminModule.cpp:1008 clamps update_interval below
+     * min_neighbor_info_broadcast_secs (14400) at SET time. The IPC
+     * range hint mirrors that floor; underflow is rejected here so
+     * the user gets a clear "invalid value" instead of silent
+     * substitution. */
+    case IPC_CFG_NEIGHBOR_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.neighbor_info.enabled = (val[0] != 0u);
+        moduleConfig.has_neighbor_info = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_NEIGHBOR_UPDATE_INTERVAL:
+        REQ_LEN(4);
+        moduleConfig.neighbor_info.update_interval = *(const uint32_t *)val;
+        moduleConfig.has_neighbor_info = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_NEIGHBOR_TRANSMIT_OVER_LORA:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.neighbor_info.transmit_over_lora = (val[0] != 0u);
+        moduleConfig.has_neighbor_info = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+
+    /* ── ModuleConfig.RangeTest (B3-P3) ──────────────────────────── */
+    case IPC_CFG_RANGETEST_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.range_test.enabled = (val[0] != 0u);
+        moduleConfig.has_range_test = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_RANGETEST_SENDER:
+        REQ_LEN(4);
+        moduleConfig.range_test.sender = *(const uint32_t *)val;
+        moduleConfig.has_range_test = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
         push_result(seq, key, kResultOK);
         return;
 
