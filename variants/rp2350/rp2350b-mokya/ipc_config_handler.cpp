@@ -475,6 +475,77 @@ extern "C" void mokya_handle_ipc_get_config(uint8_t seq,
         return;
     }
 
+    /* ── Power (B3-P2 expansion) ─────────────────────────────────── */
+    case IPC_CFG_POWER_SDS_SECS: {
+        uint32_t v = config.power.sds_secs;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_POWER_LS_SECS: {
+        uint32_t v = config.power.ls_secs;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_POWER_MIN_WAKE_SECS: {
+        uint32_t v = config.power.min_wake_secs;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_POWER_BATTERY_INA_ADDRESS: {
+        uint32_t v = config.power.device_battery_ina_address;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_POWER_POWERMON_ENABLES: {
+        /* powermon_enables is uint64; B3-P2 surfaces only low 32 bits.
+         * Anything above bit 31 in the durable config is silently
+         * truncated for the UI. */
+        uint32_t v = (uint32_t)(config.power.powermon_enables & 0xFFFFFFFFu);
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+
+    /* ── Channel module_settings (B3-P2; Channel[0] only) ────────── */
+    case IPC_CFG_CHANNEL_MODULE_POSITION_PRECISION: {
+        uint32_t v = channelFile.channels[0].settings.module_settings.position_precision;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_CHANNEL_MODULE_IS_MUTED: {
+        uint8_t v = channelFile.channels[0].settings.module_settings.is_muted ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+
+    /* ── Owner extras (B3-P2) ────────────────────────────────────── */
+    case IPC_CFG_OWNER_IS_LICENSED: {
+        uint8_t v = owner.is_licensed ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_OWNER_PUBLIC_KEY: {
+        uint16_t plen = owner.public_key.size;
+        if (plen > sizeof(buf)) plen = sizeof(buf);
+        memcpy(buf, owner.public_key.bytes, plen);
+        push_value(seq, key, buf, plen); return;
+    }
+
+    /* ── Security (B3-P2) ────────────────────────────────────────── */
+    case IPC_CFG_SECURITY_PUBLIC_KEY: {
+        uint16_t plen = config.security.public_key.size;
+        if (plen > sizeof(buf)) plen = sizeof(buf);
+        memcpy(buf, config.security.public_key.bytes, plen);
+        push_value(seq, key, buf, plen); return;
+    }
+    case IPC_CFG_SECURITY_IS_MANAGED: {
+        uint8_t v = config.security.is_managed ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_SECURITY_SERIAL_ENABLED: {
+        uint8_t v = config.security.serial_enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_SECURITY_DEBUG_LOG_API_ENABLED: {
+        uint8_t v = config.security.debug_log_api_enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_SECURITY_ADMIN_CHANNEL_ENABLED: {
+        uint8_t v = config.security.admin_channel_enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+
     /* ── Display (B3-P1 expansion) ───────────────────────────────── */
     case IPC_CFG_DISPLAY_AUTO_CAROUSEL_SECS: {
         uint32_t v = config.display.auto_screen_carousel_secs;
@@ -801,6 +872,101 @@ extern "C" void mokya_handle_ipc_set_config(uint8_t seq,
     case IPC_CFG_POSITION_BCAST_SMART_MIN_INT_SECS:
         REQ_LEN(4);
         config.position.broadcast_smart_minimum_interval_secs = *(const uint32_t *)val;
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+
+    /* ── Power (B3-P2 expansion) ─────────────────────────────────── */
+    case IPC_CFG_POWER_SDS_SECS:
+        REQ_LEN(4);
+        config.power.sds_secs = *(const uint32_t *)val;
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_POWER_LS_SECS:
+        REQ_LEN(4);
+        config.power.ls_secs = *(const uint32_t *)val;
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_POWER_MIN_WAKE_SECS:
+        REQ_LEN(4);
+        config.power.min_wake_secs = *(const uint32_t *)val;
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_POWER_BATTERY_INA_ADDRESS:
+        REQ_LEN(4);
+        config.power.device_battery_ina_address = *(const uint32_t *)val;
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_POWER_POWERMON_ENABLES: {
+        REQ_LEN(4);
+        /* Preserve high 32 bits, only update low 32. */
+        uint32_t v = *(const uint32_t *)val;
+        config.power.powermon_enables =
+            (config.power.powermon_enables & 0xFFFFFFFF00000000ULL) | (uint64_t)v;
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    }
+
+    /* ── Channel module_settings (B3-P2; Channel[0] only) ────────── */
+    case IPC_CFG_CHANNEL_MODULE_POSITION_PRECISION:
+        REQ_LEN(4);
+        channelFile.channels[0].settings.module_settings.position_precision = *(const uint32_t *)val;
+        channelFile.channels[0].settings.has_module_settings = true;
+        s_pending_segments |= SEGMENT_CHANNELS;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_CHANNEL_MODULE_IS_MUTED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        channelFile.channels[0].settings.module_settings.is_muted = (val[0] != 0u);
+        channelFile.channels[0].settings.has_module_settings = true;
+        s_pending_segments |= SEGMENT_CHANNELS;
+        push_result(seq, key, kResultOK);
+        return;
+
+    /* ── Owner extras (B3-P2) ────────────────────────────────────── */
+    case IPC_CFG_OWNER_IS_LICENSED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        owner.is_licensed = (val[0] != 0u);
+        s_pending_owner = true;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_OWNER_PUBLIC_KEY:
+        /* Read-only — Meshtastic generates the keypair internally
+         * from SecurityConfig.private_key. Mirror is via owner. */
+        push_result(seq, key, kResultInvalidValue);
+        return;
+
+    /* ── Security (B3-P2) ────────────────────────────────────────── */
+    case IPC_CFG_SECURITY_PUBLIC_KEY:
+        /* Read-only on Core 1 — see plan exclusion list. */
+        push_result(seq, key, kResultInvalidValue);
+        return;
+    case IPC_CFG_SECURITY_IS_MANAGED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        config.security.is_managed = (val[0] != 0u);
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_SECURITY_SERIAL_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        config.security.serial_enabled = (val[0] != 0u);
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_SECURITY_DEBUG_LOG_API_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        config.security.debug_log_api_enabled = (val[0] != 0u);
+        s_pending_segments |= SEGMENT_CONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_SECURITY_ADMIN_CHANNEL_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        config.security.admin_channel_enabled = (val[0] != 0u);
         s_pending_segments |= SEGMENT_CONFIG;
         push_result(seq, key, kResultOK);
         return;
