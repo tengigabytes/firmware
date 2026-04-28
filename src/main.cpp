@@ -304,9 +304,9 @@ void printInfo()
 {
     LOG_INFO("S:B:%d,%s,%s,%s", HW_VENDOR, optstr(APP_VERSION), optstr(APP_ENV), optstr(APP_REPO));
 }
-#if defined(MOKYA_IPC_GPS_STREAM)
-extern "C" void mokya_register_ipc_observers(void);
-#endif
+/* mokya_register_ipc_observers removed in M5E.3 — cascade decoder on Core 1
+ * is now the sole consumer of inbound text / node updates / TX ACKs, sourced
+ * from the FromRadio byte stream rather than per-event observer pushes. */
 
 #ifndef PIO_UNIT_TESTING
 void setup()
@@ -902,12 +902,9 @@ void setup()
     // Now that the mesh service is created, create any modules
     setupModules();
 
-#if defined(MOKYA_IPC_GPS_STREAM)
-    /* MokyaLora variant: now that textMessageModule (and friends) exist,
-     * wire up the Core 0 → Core 1 IPC observers that forward incoming
-     * structured messages onto the c0_to_c1 ring. */
-    mokya_register_ipc_observers();
-#endif
+    /* M5E.3: removed mokya_register_ipc_observers() — Core 1 cascade
+     * decoder now consumes RX text / node info / TX ACKs from the
+     * FromRadio byte stream directly, no per-event IPC pushes needed. */
 
 #if !MESHTASTIC_EXCLUDE_I2C
     // Inform modules about I2C devices
