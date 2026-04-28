@@ -644,6 +644,77 @@ extern "C" void mokya_handle_ipc_get_config(uint8_t seq,
         push_value(seq, key, &v, sizeof(v)); return;
     }
 
+    /* ── ModuleConfig.DetectionSensor (B3-P4) ────────────────────── */
+    case IPC_CFG_DETECT_ENABLED: {
+        uint8_t v = moduleConfig.detection_sensor.enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_DETECT_MIN_BCAST_SECS: {
+        uint32_t v = moduleConfig.detection_sensor.minimum_broadcast_secs;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_DETECT_STATE_BCAST_SECS: {
+        uint32_t v = moduleConfig.detection_sensor.state_broadcast_secs;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_DETECT_NAME: {
+        size_t name_len = strnlen(moduleConfig.detection_sensor.name,
+                                  sizeof(moduleConfig.detection_sensor.name));
+        if (name_len > sizeof(buf)) name_len = sizeof(buf);
+        memcpy(buf, moduleConfig.detection_sensor.name, name_len);
+        push_value(seq, key, buf, (uint16_t)name_len); return;
+    }
+    case IPC_CFG_DETECT_TRIGGER_TYPE: {
+        uint8_t v = (uint8_t)moduleConfig.detection_sensor.detection_trigger_type;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_DETECT_USE_PULLUP: {
+        uint8_t v = moduleConfig.detection_sensor.use_pullup ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+
+    /* ── ModuleConfig.CannedMessage (B3-P4) ──────────────────────── */
+    case IPC_CFG_CANNED_UPDOWN1_ENABLED: {
+        uint8_t v = moduleConfig.canned_message.updown1_enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_CANNED_SEND_BELL: {
+        uint8_t v = moduleConfig.canned_message.send_bell ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+
+    /* ── ModuleConfig.AmbientLighting (B3-P4) ────────────────────── */
+    case IPC_CFG_AMBIENT_LED_STATE: {
+        uint8_t v = moduleConfig.ambient_lighting.led_state ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_AMBIENT_CURRENT: {
+        uint8_t v = moduleConfig.ambient_lighting.current;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_AMBIENT_RED: {
+        uint8_t v = moduleConfig.ambient_lighting.red;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_AMBIENT_GREEN: {
+        uint8_t v = moduleConfig.ambient_lighting.green;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_AMBIENT_BLUE: {
+        uint8_t v = moduleConfig.ambient_lighting.blue;
+        push_value(seq, key, &v, 1u); return;
+    }
+
+    /* ── ModuleConfig.Paxcounter (B3-P4) ─────────────────────────── */
+    case IPC_CFG_PAX_ENABLED: {
+        uint8_t v = moduleConfig.paxcounter.enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_PAX_UPDATE_INTERVAL: {
+        uint32_t v = moduleConfig.paxcounter.paxcounter_update_interval;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+
     default:
         push_result(seq, key, kResultUnknownKey);
         return;
@@ -1193,6 +1264,127 @@ extern "C" void mokya_handle_ipc_set_config(uint8_t seq,
         REQ_LEN(4);
         moduleConfig.range_test.sender = *(const uint32_t *)val;
         moduleConfig.has_range_test = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+
+    /* ── ModuleConfig.DetectionSensor (B3-P4) ────────────────────── */
+    case IPC_CFG_DETECT_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.detection_sensor.enabled = (val[0] != 0u);
+        moduleConfig.has_detection_sensor = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_DETECT_MIN_BCAST_SECS:
+        REQ_LEN(4);
+        moduleConfig.detection_sensor.minimum_broadcast_secs = *(const uint32_t *)val;
+        moduleConfig.has_detection_sensor = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_DETECT_STATE_BCAST_SECS:
+        REQ_LEN(4);
+        moduleConfig.detection_sensor.state_broadcast_secs = *(const uint32_t *)val;
+        moduleConfig.has_detection_sensor = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_DETECT_NAME: {
+        if (vlen >= sizeof(moduleConfig.detection_sensor.name)) {
+            push_result(seq, key, kResultInvalidValue); return;
+        }
+        memcpy(moduleConfig.detection_sensor.name, val, vlen);
+        moduleConfig.detection_sensor.name[vlen] = '\0';
+        moduleConfig.has_detection_sensor = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    }
+    case IPC_CFG_DETECT_TRIGGER_TYPE:
+        REQ_LEN(1);
+        if (val[0] > 5u) { push_result(seq, key, kResultInvalidValue); return; }
+        moduleConfig.detection_sensor.detection_trigger_type =
+            (decltype(moduleConfig.detection_sensor.detection_trigger_type))val[0];
+        moduleConfig.has_detection_sensor = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_DETECT_USE_PULLUP:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.detection_sensor.use_pullup = (val[0] != 0u);
+        moduleConfig.has_detection_sensor = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+
+    /* ── ModuleConfig.CannedMessage (B3-P4) ──────────────────────── */
+    case IPC_CFG_CANNED_UPDOWN1_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.canned_message.updown1_enabled = (val[0] != 0u);
+        moduleConfig.has_canned_message = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_CANNED_SEND_BELL:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.canned_message.send_bell = (val[0] != 0u);
+        moduleConfig.has_canned_message = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+
+    /* ── ModuleConfig.AmbientLighting (B3-P4) ─────────────────────
+     * current/red/green/blue are uint8 in nanopb. Wire format is one
+     * byte each. led_state is bool. */
+    case IPC_CFG_AMBIENT_LED_STATE:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.ambient_lighting.led_state = (val[0] != 0u);
+        moduleConfig.has_ambient_lighting = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_AMBIENT_CURRENT:
+        REQ_LEN(1);
+        moduleConfig.ambient_lighting.current = val[0];
+        moduleConfig.has_ambient_lighting = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_AMBIENT_RED:
+        REQ_LEN(1);
+        moduleConfig.ambient_lighting.red = val[0];
+        moduleConfig.has_ambient_lighting = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_AMBIENT_GREEN:
+        REQ_LEN(1);
+        moduleConfig.ambient_lighting.green = val[0];
+        moduleConfig.has_ambient_lighting = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_AMBIENT_BLUE:
+        REQ_LEN(1);
+        moduleConfig.ambient_lighting.blue = val[0];
+        moduleConfig.has_ambient_lighting = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+
+    /* ── ModuleConfig.Paxcounter (B3-P4) ─────────────────────────── */
+    case IPC_CFG_PAX_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.paxcounter.enabled = (val[0] != 0u);
+        moduleConfig.has_paxcounter = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_PAX_UPDATE_INTERVAL:
+        REQ_LEN(4);
+        moduleConfig.paxcounter.paxcounter_update_interval = *(const uint32_t *)val;
+        moduleConfig.has_paxcounter = true;
         s_pending_segments |= SEGMENT_MODULECONFIG;
         push_result(seq, key, kResultOK);
         return;
