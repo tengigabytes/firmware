@@ -526,6 +526,19 @@ extern "C" void mokya_handle_ipc_get_config(uint8_t seq,
         uint8_t v = channelFile.channels[channel_index].settings.module_settings.is_muted ? 1u : 0u;
         push_value(seq, key, &v, 1u); return;
     }
+    /* ── Channel role + uplink/downlink (B-2 P3 — L1 sweep) ───────── */
+    case IPC_CFG_CHANNEL_ROLE: {
+        uint8_t v = (uint8_t)channelFile.channels[channel_index].role;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_CHANNEL_UPLINK_ENABLED: {
+        uint8_t v = channelFile.channels[channel_index].settings.uplink_enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_CHANNEL_DOWNLINK_ENABLED: {
+        uint8_t v = channelFile.channels[channel_index].settings.downlink_enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
 
     /* ── Owner extras (B3-P2) ────────────────────────────────────── */
     case IPC_CFG_OWNER_IS_LICENSED: {
@@ -1234,6 +1247,27 @@ extern "C" void mokya_handle_ipc_set_config(uint8_t seq,
         REQ_LEN(1); REQ_BOOL_RANGE();
         channelFile.channels[channel_index].settings.module_settings.is_muted = (val[0] != 0u);
         channelFile.channels[channel_index].settings.has_module_settings = true;
+        s_pending_segments |= SEGMENT_CHANNELS;
+        push_result(seq, key, kResultOK);
+        return;
+    /* ── Channel role + uplink/downlink (B-2 P3 — L1 sweep) ───────── */
+    case IPC_CFG_CHANNEL_ROLE:
+        REQ_LEN(1);
+        if (val[0] > 2u) { push_result(seq, key, kResultInvalidValue); return; }
+        channelFile.channels[channel_index].role =
+            (meshtastic_Channel_Role)val[0];
+        s_pending_segments |= SEGMENT_CHANNELS;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_CHANNEL_UPLINK_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        channelFile.channels[channel_index].settings.uplink_enabled = (val[0] != 0u);
+        s_pending_segments |= SEGMENT_CHANNELS;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_CHANNEL_DOWNLINK_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        channelFile.channels[channel_index].settings.downlink_enabled = (val[0] != 0u);
         s_pending_segments |= SEGMENT_CHANNELS;
         push_result(seq, key, kResultOK);
         return;
