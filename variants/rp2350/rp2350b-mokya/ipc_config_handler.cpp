@@ -235,6 +235,33 @@ bool set_channel_psk(uint8_t channel_index, const uint8_t *val, uint16_t vlen)
     return true;
 }
 
+/* S-7.10 — RemoteHardware available_pins[] addressed by channel_index
+ * repurposed as slot_index 0..3. Mirrors B3-P3 channel pattern. */
+constexpr uint8_t kRhwPinMax = 4u;  /* matches available_pins[4] in nanopb */
+
+bool rhw_pin_slot_valid(uint8_t slot)
+{
+    return slot < kRhwPinMax;
+}
+
+uint16_t copy_rhw_pin_name(uint8_t slot, uint8_t *out, uint16_t out_max)
+{
+    const auto &p = moduleConfig.remote_hardware.available_pins[slot];
+    size_t n = strnlen(p.name, sizeof(p.name));
+    if (n > out_max) n = out_max;
+    memcpy(out, p.name, n);
+    return (uint16_t)n;
+}
+
+bool set_rhw_pin_name(uint8_t slot, const uint8_t *val, uint16_t vlen)
+{
+    auto &p = moduleConfig.remote_hardware.available_pins[slot];
+    if (vlen >= sizeof(p.name)) return false;
+    memcpy(p.name, val, vlen);
+    p.name[vlen] = '\0';
+    return true;
+}
+
 } // namespace
 
 /* ── GET handler ───────────────────────────────────────────────────── */
@@ -249,9 +276,15 @@ extern "C" void mokya_handle_ipc_get_config(uint8_t seq,
         push_result(seq, 0u, kResultInvalidValue);
         return;
     }
-    /* channel_index honoured only by 0x06xx Channel keys (B3-P3). For
-     * non-channel keys it is ignored. */
+    /* channel_index honoured by 0x06xx Channel keys (B3-P3) and
+     * 0x1A03..0x1A05 RHW pin-slot keys (S-7.10). For all other keys it
+     * is ignored. */
     if ((key & 0xFF00u) == 0x0600u && !channel_index_valid(channel_index)) {
+        push_result(seq, key, kResultInvalidValue);
+        return;
+    }
+    if (key >= IPC_CFG_RHW_PIN_GPIO && key <= IPC_CFG_RHW_PIN_TYPE
+        && !rhw_pin_slot_valid(channel_index)) {
         push_result(seq, key, kResultInvalidValue);
         return;
     }
@@ -846,6 +879,23 @@ extern "C" void mokya_handle_ipc_get_config(uint8_t seq,
         uint8_t v = moduleConfig.remote_hardware.allow_undefined_pin_access ? 1u : 0u;
         push_value(seq, key, &v, 1u); return;
     }
+    /* S-7.10 — available_pins[] (slot via channel_index). */
+    case IPC_CFG_RHW_PIN_COUNT: {
+        uint8_t v = (uint8_t)moduleConfig.remote_hardware.available_pins_count;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_RHW_PIN_GPIO: {
+        uint8_t v = (uint8_t)moduleConfig.remote_hardware.available_pins[channel_index].gpio_pin;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_RHW_PIN_NAME:
+        n = copy_rhw_pin_name(channel_index, buf, sizeof(buf));
+        push_value(seq, key, buf, n);
+        return;
+    case IPC_CFG_RHW_PIN_TYPE: {
+        uint8_t v = (uint8_t)moduleConfig.remote_hardware.available_pins[channel_index].type;
+        push_value(seq, key, &v, 1u); return;
+    }
 
     default:
         push_result(seq, key, kResultUnknownKey);
@@ -867,9 +917,15 @@ extern "C" void mokya_handle_ipc_set_config(uint8_t seq,
         push_result(seq, 0u, kResultInvalidValue);
         return;
     }
-    /* channel_index honoured only by 0x06xx Channel keys (B3-P3). For
-     * non-channel keys it is ignored. */
+    /* channel_index honoured by 0x06xx Channel keys (B3-P3) and
+     * 0x1A03..0x1A05 RHW pin-slot keys (S-7.10). For all other keys it
+     * is ignored. */
     if ((key & 0xFF00u) == 0x0600u && !channel_index_valid(channel_index)) {
+        push_result(seq, key, kResultInvalidValue);
+        return;
+    }
+    if (key >= IPC_CFG_RHW_PIN_GPIO && key <= IPC_CFG_RHW_PIN_TYPE
+        && !rhw_pin_slot_valid(channel_index)) {
         push_result(seq, key, kResultInvalidValue);
         return;
     }
@@ -1754,6 +1810,40 @@ extern "C" void mokya_handle_ipc_set_config(uint8_t seq,
     case IPC_CFG_RHW_ALLOW_UNDEFINED_PIN_ACCESS:
         REQ_LEN(1); REQ_BOOL_RANGE();
         moduleConfig.remote_hardware.allow_undefined_pin_access = (val[0] != 0u);
+        moduleConfig.has_remote_hardware = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+
+    /* S-7.10 — available_pins[] (slot via channel_index). */
+    case IPC_CFG_RHW_PIN_COUNT:
+        REQ_LEN(1);
+        if (val[0] > kRhwPinMax) { push_result(seq, key, kResultInvalidValue); return; }
+        moduleConfig.remote_hardware.available_pins_count = (pb_size_t)val[0];
+        moduleConfig.has_remote_hardware = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_RHW_PIN_GPIO:
+        REQ_LEN(1);
+        moduleConfig.remote_hardware.available_pins[channel_index].gpio_pin = (uint32_t)val[0];
+        moduleConfig.has_remote_hardware = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_RHW_PIN_NAME:
+        if (!set_rhw_pin_name(channel_index, val, vlen)) {
+            push_result(seq, key, kResultInvalidValue); return;
+        }
+        moduleConfig.has_remote_hardware = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_RHW_PIN_TYPE:
+        REQ_LEN(1);
+        if (val[0] > 2u) { push_result(seq, key, kResultInvalidValue); return; }
+        moduleConfig.remote_hardware.available_pins[channel_index].type =
+            (meshtastic_RemoteHardwarePinType)val[0];
         moduleConfig.has_remote_hardware = true;
         s_pending_segments |= SEGMENT_MODULECONFIG;
         push_result(seq, key, kResultOK);
