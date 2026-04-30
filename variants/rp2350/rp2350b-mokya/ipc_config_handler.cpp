@@ -715,6 +715,138 @@ extern "C" void mokya_handle_ipc_get_config(uint8_t seq,
         push_value(seq, key, &v, sizeof(v)); return;
     }
 
+    /* ── ModuleConfig.StoreForward (T2.4.1) ────────────────────────── */
+    case IPC_CFG_SF_ENABLED: {
+        uint8_t v = moduleConfig.store_forward.enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_SF_HEARTBEAT: {
+        uint8_t v = moduleConfig.store_forward.heartbeat ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_SF_RECORDS: {
+        uint32_t v = moduleConfig.store_forward.records;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_SF_HISTORY_RETURN_MAX: {
+        uint32_t v = moduleConfig.store_forward.history_return_max;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_SF_HISTORY_RETURN_WINDOW: {
+        uint32_t v = moduleConfig.store_forward.history_return_window;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_SF_IS_SERVER: {
+        uint8_t v = moduleConfig.store_forward.is_server ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+
+    /* ── ModuleConfig.Serial (T2.4.2) ──────────────────────────────── */
+    case IPC_CFG_SERIAL_ENABLED: {
+        uint8_t v = moduleConfig.serial.enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_SERIAL_ECHO: {
+        uint8_t v = moduleConfig.serial.echo ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_SERIAL_RXD: {
+        uint32_t v = moduleConfig.serial.rxd;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_SERIAL_TXD: {
+        uint32_t v = moduleConfig.serial.txd;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_SERIAL_BAUD: {
+        uint8_t v = (uint8_t)moduleConfig.serial.baud;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_SERIAL_TIMEOUT: {
+        uint32_t v = moduleConfig.serial.timeout;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_SERIAL_MODE: {
+        uint8_t v = (uint8_t)moduleConfig.serial.mode;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_SERIAL_OVERRIDE_CONSOLE: {
+        uint8_t v = moduleConfig.serial.override_console_serial_port ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+
+    /* ── ModuleConfig.ExternalNotification (T2.4.3) ────────────────── */
+    case IPC_CFG_EXTNOT_ENABLED: {
+        uint8_t v = moduleConfig.external_notification.enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_EXTNOT_OUTPUT_MS: {
+        uint32_t v = moduleConfig.external_notification.output_ms;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_EXTNOT_OUTPUT: {
+        uint32_t v = moduleConfig.external_notification.output;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_EXTNOT_OUTPUT_VIBRA: {
+        uint32_t v = moduleConfig.external_notification.output_vibra;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_EXTNOT_OUTPUT_BUZZER: {
+        uint32_t v = moduleConfig.external_notification.output_buzzer;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_EXTNOT_ACTIVE: {
+        uint8_t v = moduleConfig.external_notification.active ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_EXTNOT_ALERT_MESSAGE: {
+        uint8_t v = moduleConfig.external_notification.alert_message ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_EXTNOT_ALERT_MESSAGE_VIBRA: {
+        uint8_t v = moduleConfig.external_notification.alert_message_vibra ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_EXTNOT_ALERT_MESSAGE_BUZZER: {
+        uint8_t v = moduleConfig.external_notification.alert_message_buzzer ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_EXTNOT_ALERT_BELL: {
+        uint8_t v = moduleConfig.external_notification.alert_bell ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_EXTNOT_ALERT_BELL_VIBRA: {
+        uint8_t v = moduleConfig.external_notification.alert_bell_vibra ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_EXTNOT_ALERT_BELL_BUZZER: {
+        uint8_t v = moduleConfig.external_notification.alert_bell_buzzer ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_EXTNOT_USE_PWM: {
+        uint8_t v = moduleConfig.external_notification.use_pwm ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_EXTNOT_NAG_TIMEOUT: {
+        uint32_t v = moduleConfig.external_notification.nag_timeout;
+        push_value(seq, key, &v, sizeof(v)); return;
+    }
+    case IPC_CFG_EXTNOT_USE_I2S_AS_BUZZER: {
+        uint8_t v = moduleConfig.external_notification.use_i2s_as_buzzer ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+
+    /* ── ModuleConfig.RemoteHardware (T2.4.4) ──────────────────────── */
+    case IPC_CFG_RHW_ENABLED: {
+        uint8_t v = moduleConfig.remote_hardware.enabled ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+    case IPC_CFG_RHW_ALLOW_UNDEFINED_PIN_ACCESS: {
+        uint8_t v = moduleConfig.remote_hardware.allow_undefined_pin_access ? 1u : 0u;
+        push_value(seq, key, &v, 1u); return;
+    }
+
     default:
         push_result(seq, key, kResultUnknownKey);
         return;
@@ -1385,6 +1517,244 @@ extern "C" void mokya_handle_ipc_set_config(uint8_t seq,
         REQ_LEN(4);
         moduleConfig.paxcounter.paxcounter_update_interval = *(const uint32_t *)val;
         moduleConfig.has_paxcounter = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+
+    /* ── ModuleConfig.StoreForward (T2.4.1) ────────────────────────── */
+    case IPC_CFG_SF_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.store_forward.enabled = (val[0] != 0u);
+        moduleConfig.has_store_forward = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_SF_HEARTBEAT:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.store_forward.heartbeat = (val[0] != 0u);
+        moduleConfig.has_store_forward = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_SF_RECORDS:
+        REQ_LEN(4);
+        moduleConfig.store_forward.records = *(const uint32_t *)val;
+        moduleConfig.has_store_forward = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_SF_HISTORY_RETURN_MAX:
+        REQ_LEN(4);
+        moduleConfig.store_forward.history_return_max = *(const uint32_t *)val;
+        moduleConfig.has_store_forward = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_SF_HISTORY_RETURN_WINDOW:
+        REQ_LEN(4);
+        moduleConfig.store_forward.history_return_window = *(const uint32_t *)val;
+        moduleConfig.has_store_forward = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_SF_IS_SERVER:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.store_forward.is_server = (val[0] != 0u);
+        moduleConfig.has_store_forward = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+
+    /* ── ModuleConfig.Serial (T2.4.2) ──────────────────────────────── *
+     * baud: enum 0..15, mode: enum 0..10. Out-of-range rejected so a
+     * malformed SET surfaces as INVALID_VALUE instead of silently
+     * being accepted by Meshtastic. */
+    case IPC_CFG_SERIAL_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.serial.enabled = (val[0] != 0u);
+        moduleConfig.has_serial = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_SERIAL_ECHO:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.serial.echo = (val[0] != 0u);
+        moduleConfig.has_serial = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_SERIAL_RXD:
+        REQ_LEN(4);
+        moduleConfig.serial.rxd = *(const uint32_t *)val;
+        moduleConfig.has_serial = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_SERIAL_TXD:
+        REQ_LEN(4);
+        moduleConfig.serial.txd = *(const uint32_t *)val;
+        moduleConfig.has_serial = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_SERIAL_BAUD:
+        REQ_LEN(1);
+        if (val[0] > 15u) {
+            push_result(seq, key, kResultInvalidValue);
+            return;
+        }
+        moduleConfig.serial.baud =
+            (meshtastic_ModuleConfig_SerialConfig_Serial_Baud)val[0];
+        moduleConfig.has_serial = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_SERIAL_TIMEOUT:
+        REQ_LEN(4);
+        moduleConfig.serial.timeout = *(const uint32_t *)val;
+        moduleConfig.has_serial = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_SERIAL_MODE:
+        REQ_LEN(1);
+        if (val[0] > 10u) {
+            push_result(seq, key, kResultInvalidValue);
+            return;
+        }
+        moduleConfig.serial.mode =
+            (meshtastic_ModuleConfig_SerialConfig_Serial_Mode)val[0];
+        moduleConfig.has_serial = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_SERIAL_OVERRIDE_CONSOLE:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.serial.override_console_serial_port = (val[0] != 0u);
+        moduleConfig.has_serial = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+
+    /* ── ModuleConfig.ExternalNotification (T2.4.3) ────────────────── */
+    case IPC_CFG_EXTNOT_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.external_notification.enabled = (val[0] != 0u);
+        moduleConfig.has_external_notification = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_EXTNOT_OUTPUT_MS:
+        REQ_LEN(4);
+        moduleConfig.external_notification.output_ms = *(const uint32_t *)val;
+        moduleConfig.has_external_notification = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_EXTNOT_OUTPUT:
+        REQ_LEN(4);
+        moduleConfig.external_notification.output = *(const uint32_t *)val;
+        moduleConfig.has_external_notification = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_EXTNOT_OUTPUT_VIBRA:
+        REQ_LEN(4);
+        moduleConfig.external_notification.output_vibra = *(const uint32_t *)val;
+        moduleConfig.has_external_notification = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_EXTNOT_OUTPUT_BUZZER:
+        REQ_LEN(4);
+        moduleConfig.external_notification.output_buzzer = *(const uint32_t *)val;
+        moduleConfig.has_external_notification = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_EXTNOT_ACTIVE:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.external_notification.active = (val[0] != 0u);
+        moduleConfig.has_external_notification = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_EXTNOT_ALERT_MESSAGE:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.external_notification.alert_message = (val[0] != 0u);
+        moduleConfig.has_external_notification = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_EXTNOT_ALERT_MESSAGE_VIBRA:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.external_notification.alert_message_vibra = (val[0] != 0u);
+        moduleConfig.has_external_notification = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_EXTNOT_ALERT_MESSAGE_BUZZER:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.external_notification.alert_message_buzzer = (val[0] != 0u);
+        moduleConfig.has_external_notification = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_EXTNOT_ALERT_BELL:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.external_notification.alert_bell = (val[0] != 0u);
+        moduleConfig.has_external_notification = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_EXTNOT_ALERT_BELL_VIBRA:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.external_notification.alert_bell_vibra = (val[0] != 0u);
+        moduleConfig.has_external_notification = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_EXTNOT_ALERT_BELL_BUZZER:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.external_notification.alert_bell_buzzer = (val[0] != 0u);
+        moduleConfig.has_external_notification = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_EXTNOT_USE_PWM:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.external_notification.use_pwm = (val[0] != 0u);
+        moduleConfig.has_external_notification = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_EXTNOT_NAG_TIMEOUT:
+        REQ_LEN(4);
+        moduleConfig.external_notification.nag_timeout = *(const uint32_t *)val;
+        moduleConfig.has_external_notification = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_EXTNOT_USE_I2S_AS_BUZZER:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.external_notification.use_i2s_as_buzzer = (val[0] != 0u);
+        moduleConfig.has_external_notification = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+
+    /* ── ModuleConfig.RemoteHardware (T2.4.4) ──────────────────────── */
+    case IPC_CFG_RHW_ENABLED:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.remote_hardware.enabled = (val[0] != 0u);
+        moduleConfig.has_remote_hardware = true;
+        s_pending_segments |= SEGMENT_MODULECONFIG;
+        push_result(seq, key, kResultOK);
+        return;
+    case IPC_CFG_RHW_ALLOW_UNDEFINED_PIN_ACCESS:
+        REQ_LEN(1); REQ_BOOL_RANGE();
+        moduleConfig.remote_hardware.allow_undefined_pin_access = (val[0] != 0u);
+        moduleConfig.has_remote_hardware = true;
         s_pending_segments |= SEGMENT_MODULECONFIG;
         push_result(seq, key, kResultOK);
         return;
