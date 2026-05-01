@@ -55,6 +55,30 @@ extern void __real_flash_range_erase(uint32_t flash_offs, size_t count);
 extern void __real_flash_range_program(uint32_t flash_offs,
                                        const uint8_t *data, size_t count);
 
+/* SIO hardware spinlock — Phase 1.X two-core flash mutex. Must match
+ * IPC_FLASH_SPINLOCK_NUM in firmware/shared/ipc/ipc_shared_layout.h.
+ * Hardcoded to ID 29 here too because this Pico SDK-level wrapper
+ * intentionally avoids the ipc_shared_layout.h include. */
+#define MOKYA_FLASH_SPINLOCK_ADDR  ((volatile uint32_t *)(0xD0000100u + 29u * 4u))
+
+/* ── SIO hardware spinlock — Phase 1.X two-core flash mutex (RAM) ─────── *
+ *
+ * Acquire MUST happen before transitioning flash_lock IDLE→REQUEST.
+ * See firmware/shared/ipc/ipc_shared_layout.h IPC_FLASH_SPINLOCK_* and
+ * the matching helpers in firmware/core1/src/ime/flash_safety_wrap.c. */
+static void __no_inline_not_in_flash_func(mokya_flash_spinlock_acquire)(void)
+{
+    /* Unbounded — peer wrap is bounded by actual flash op (~100 ms);
+     * peer crash is recovered by HW watchdog (3 s) anyway. Read returns
+     * non-zero on successful acquire, 0 if locked. */
+    while (*MOKYA_FLASH_SPINLOCK_ADDR == 0u) { /* spin */ }
+}
+
+static void __no_inline_not_in_flash_func(mokya_flash_spinlock_release)(void)
+{
+    *MOKYA_FLASH_SPINLOCK_ADDR = 0u;
+}
+
 /* ── Park / unpark helpers (MUST be in RAM) ────────────────────────────── */
 
 static void __no_inline_not_in_flash_func(mokya_flash_park_core1)(
@@ -90,12 +114,16 @@ void __no_inline_not_in_flash_func(__wrap_flash_range_erase)(
 {
     uint32_t saved;
     /* Pause the watchdog liveness check across the flash op — Core 0's
-     * IRQ disable stalls the heartbeat tick that wd_task expects. */
+     * IRQ disable stalls the heartbeat tick that wd_task expects.
+     * Spinlock acquire MUST happen before park request so concurrent
+     * C1 wrap can't both signal doorbells to each other. */
     __atomic_fetch_add(MOKYA_WD_PAUSE_ADDR, 1u, __ATOMIC_RELAXED);
+    mokya_flash_spinlock_acquire();
     mokya_flash_park_core1(&saved);
     __real_flash_range_erase(flash_offs, count);
     MOKYA_XIP_CTRL_SET = MOKYA_XIP_CACHE_EN;  /* re-enable cache */
     mokya_flash_unpark_core1(saved);
+    mokya_flash_spinlock_release();
     __atomic_fetch_sub(MOKYA_WD_PAUSE_ADDR, 1u, __ATOMIC_RELAXED);
 }
 
@@ -104,9 +132,11 @@ void __no_inline_not_in_flash_func(__wrap_flash_range_program)(
 {
     uint32_t saved;
     __atomic_fetch_add(MOKYA_WD_PAUSE_ADDR, 1u, __ATOMIC_RELAXED);
+    mokya_flash_spinlock_acquire();
     mokya_flash_park_core1(&saved);
     __real_flash_range_program(flash_offs, data, count);
     MOKYA_XIP_CTRL_SET = MOKYA_XIP_CACHE_EN;  /* re-enable cache */
     mokya_flash_unpark_core1(saved);
+    mokya_flash_spinlock_release();
     __atomic_fetch_sub(MOKYA_WD_PAUSE_ADDR, 1u, __ATOMIC_RELAXED);
 }
