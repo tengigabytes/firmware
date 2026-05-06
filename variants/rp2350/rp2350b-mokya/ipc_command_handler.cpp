@@ -26,6 +26,10 @@ extern "C" void mokya_handle_ipc_set_config(uint8_t seq, const uint8_t *payload,
 extern "C" void mokya_handle_ipc_commit_config(uint8_t seq, const uint8_t *payload, uint16_t len);
 extern "C" void mokya_handle_ipc_commit_reboot(uint8_t seq, const uint8_t *payload, uint16_t len);
 
+/* Implemented in ipc_dormant_handler.cpp (Phase C Sprint 3b). */
+extern "C" void mokya_handle_ipc_dormant_request(uint8_t seq, const uint8_t *payload, uint16_t len);
+extern "C" void mokya_handle_ipc_dormant_wake(uint8_t seq, const uint8_t *payload, uint16_t len);
+
 /* Thunks for ipc_config_handler.cpp — keep that TU free of MeshService.h
  * (which pulls a heavier dependency chain than we want there). */
 
@@ -83,6 +87,12 @@ extern "C" void mokya_handle_ipc_command(uint8_t msg_id,
             return;
         case IPC_CMD_COMMIT_REBOOT:
             mokya_handle_ipc_commit_reboot(ipc_seq, payload, payload_len);
+            return;
+        case IPC_CMD_DORMANT_REQUEST:
+            mokya_handle_ipc_dormant_request(ipc_seq, payload, payload_len);
+            return;
+        case IPC_CMD_DORMANT_WAKE:
+            mokya_handle_ipc_dormant_wake(ipc_seq, payload, payload_len);
             return;
         case IPC_MSG_LOG_LINE:
             /* Log lines from Core 1 historically went onto the same DATA
