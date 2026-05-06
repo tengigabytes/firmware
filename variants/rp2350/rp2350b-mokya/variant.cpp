@@ -342,7 +342,21 @@ extern "C" void vApplicationIdleHook(void)
         __atomic_fetch_add(&g_ipc_shared.c0_heartbeat, 1u, __ATOMIC_RELAXED);
     }
 
-    if (s_core1_launched) return;
+    if (s_core1_launched) {
+        /* Phase C Sprint 2: Core 0 ARM clock-gates between the bursty
+         * Meshtastic main-loop activity.  Each idle hook call WFIs
+         * until the next interrupt fires (SysTick at 1 kHz, SX1262
+         * DIO1, USB, doorbell from Core 1).  Per the Sprint 2 design
+         * note this is the cheapest path to a measurable bench drop
+         * — Sprint 1 confirmed Core-1-only WFI doesn't move the
+         * needle because Core 0 was busy-looping the same SoC.
+         *
+         * Risk surface is small: the heartbeat above already ran, so
+         * the watchdog liveness chain still sees activity; SX1262 IRQ
+         * via DIO0/1 wakes us promptly when LoRa needs attention. */
+        __asm volatile ("wfi" ::: "memory");
+        return;
+    }
     s_core1_launched = true;
 
     volatile uint32_t *const dbg =
